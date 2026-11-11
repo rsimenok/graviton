@@ -103,7 +103,60 @@ public struct SettingsSheet: View {
                             )
                     )
 
-                    // 2. Monitored Surfaces
+                    // 2. System (Launch at Login)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("SYSTEM")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(.secondary)
+                            .tracking(0.5)
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Toggle(isOn: Binding(
+                                get: { tracker.isLaunchAtLoginEnabled },
+                                set: { tracker.setLaunchAtLogin(enabled: $0) }
+                            )) {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "power")
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundColor(.accentColor)
+                                        .frame(width: 16)
+
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Launch at Login")
+                                            .font(.system(size: 11, weight: .semibold))
+                                        Text("Start AGY Token Tracker automatically when you log in to your Mac.")
+                                            .font(.system(size: 9.5))
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                            }
+                            .toggleStyle(.switch)
+                            .disabled(!tracker.isLaunchAtLoginAvailable)
+
+                            if !tracker.isLaunchAtLoginAvailable {
+                                Text("Available when running from an installed application bundle.")
+                                    .font(.system(size: 9))
+                                    .foregroundColor(.secondary.opacity(0.8))
+                                    .padding(.leading, 24)
+                            } else if let error = tracker.launchAtLoginError {
+                                Text(error)
+                                    .font(.system(size: 9))
+                                    .foregroundColor(.red)
+                                    .padding(.leading, 24)
+                            }
+                        }
+                    }
+                    .padding(10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+                            )
+                    )
+
+                    // 3. Monitored Surfaces
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Monitored Surfaces & Storage")
                             .font(.system(size: 11, weight: .semibold))
@@ -130,7 +183,7 @@ public struct SettingsSheet: View {
                         }
                     }
 
-                    // 3. Pricing Engine
+                    // 4. Pricing Engine
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Pricing Engine")
                             .font(.system(size: 11, weight: .semibold))
@@ -221,6 +274,9 @@ public struct SettingsSheet: View {
             .padding(.vertical, 8)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .onAppear {
+            tracker.refreshLaunchAtLoginStatus()
+        }
     }
 
     private var appVersionString: String {

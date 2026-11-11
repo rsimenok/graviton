@@ -93,6 +93,10 @@ public final class TrackerViewModel: ObservableObject {
     @Published public var historyData: MonthlyHistoryData = HistoryStore.shared.currentData
     @Published public var selectedHistoryYear: Int = Calendar.current.component(.year, from: Date())
 
+    @Published public var isLaunchAtLoginEnabled: Bool = false
+    @Published public var isLaunchAtLoginAvailable: Bool = false
+    @Published public var launchAtLoginError: String? = nil
+
     @Published public private(set) var currentMetrics = ComputedMetrics()
     @Published public private(set) var filteredSessions: [SessionSummary] = []
     @Published public private(set) var modelUsages: [ModelUsage] = []
@@ -102,6 +106,7 @@ public final class TrackerViewModel: ObservableObject {
     private let pricing = PricingService.shared
     private let watcher = FolderWatcher()
     private let quotaService = QuotaService.shared
+    private let launchAtLoginManager: LaunchAtLoginManaging
 
     private var cancellables = Set<AnyCancellable>()
     private var lastComputedDayStart: Date = Calendar.current.startOfDay(for: Date())
@@ -110,7 +115,8 @@ public final class TrackerViewModel: ObservableObject {
     private var lastWindowOpenRefreshDate: Date = .distantPast
     private var pendingRefresh: Bool = false
 
-    public init(startBackgroundServices: Bool = true) {
+    public init(startBackgroundServices: Bool = true, launchAtLoginManager: LaunchAtLoginManaging = LaunchAtLoginManager.shared) {
+        self.launchAtLoginManager = launchAtLoginManager
         if let savedPeriod = UserDefaults.standard.string(forKey: "agy_selected_period") ?? UserDefaults.standard.string(forKey: "agv_selected_period"),
            let period = TimePeriod(rawValue: savedPeriod) {
             self.selectedPeriod = period
@@ -131,6 +137,8 @@ public final class TrackerViewModel: ObservableObject {
         if let latestYear = HistoryStore.shared.availableYears.first {
             self.selectedHistoryYear = latestYear
         }
+
+        refreshLaunchAtLoginStatus()
 
         guard startBackgroundServices else { return }
 
@@ -483,6 +491,24 @@ public final class TrackerViewModel: ObservableObject {
             return Self.formatCurrency(totalCost)
         case .compact:
             return ""
+        }
+    }
+
+    // MARK: - Launch at Login
+
+    public func refreshLaunchAtLoginStatus() {
+        isLaunchAtLoginAvailable = launchAtLoginManager.isAvailable
+        isLaunchAtLoginEnabled = launchAtLoginManager.isEnabled
+    }
+
+    public func setLaunchAtLogin(enabled: Bool) {
+        do {
+            try launchAtLoginManager.setEnabled(enabled)
+            isLaunchAtLoginEnabled = launchAtLoginManager.isEnabled
+            launchAtLoginError = nil
+        } catch {
+            launchAtLoginError = error.localizedDescription
+            isLaunchAtLoginEnabled = launchAtLoginManager.isEnabled
         }
     }
 

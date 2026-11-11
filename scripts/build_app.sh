@@ -9,8 +9,14 @@ CONTENTS_DIR="${BUNDLE_DIR}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 
+if [ -z "$DEVELOPER_DIR" ] && [ -d "/Applications/Xcode.app/Contents/Developer" ]; then
+    export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
+fi
+export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-/tmp/clang-cache}"
+mkdir -p "$CLANG_MODULE_CACHE_PATH"
+
 echo "🔨 Building release binary with Swift PM..."
-swift build -c release
+TMPDIR=/tmp swift build -c release --disable-sandbox
 
 echo "📦 Creating macOS App Bundle at ${BUNDLE_DIR}..."
 rm -rf "${BUNDLE_DIR}"
@@ -51,6 +57,9 @@ EOF
 
 # Create PkgInfo
 echo -n "APPL????" > "${CONTENTS_DIR}/PkgInfo"
+
+echo "🔏 Signing app bundle with ad-hoc signature..."
+codesign --force --deep --sign - "${BUNDLE_DIR}"
 
 echo "✅ App bundle created successfully at ${BUNDLE_DIR}!"
 
