@@ -52,20 +52,20 @@ public struct DashboardView: View {
             VStack(spacing: 7) {
                 // Header Bar
                 HStack(spacing: 8) {
-                    Image(systemName: tracker.selectedSurface == .all ? "bolt.shield.fill" : tracker.selectedSurface.iconName)
+                    Image(systemName: "bolt.shield.fill")
                         .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(
                             LinearGradient(
-                                colors: tracker.selectedSurface == .all ? [.yellow, .orange] : [tracker.selectedSurface.badgeColor, tracker.selectedSurface.badgeColor.opacity(0.8)],
+                                colors: [.yellow, .orange],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             )
                         )
 
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(tracker.selectedSurface == .all ? "Antigravity Unified" : tracker.selectedSurface.rawValue)
+                        Text("Graviton")
                             .font(.system(size: 13, weight: .bold))
-                        Text("Token & Cost Monitor")
+                        Text("Antigravity Token & Cost Monitor")
                             .font(.system(size: 10))
                             .foregroundColor(.secondary)
                     }
