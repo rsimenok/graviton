@@ -86,8 +86,10 @@ Built entirely with **SwiftUI** and **AppKit** with a modern Liquid Glass aesthe
 - Xcode 15+ or Command Line Tools (`swift`).
 
 ### 1. One-Command Build & Install (Recommended)
-Build the production `.app` bundle, install it directly into `/Applications`, and launch it:
+Clone the repository, build the production `.app` bundle, install it directly into `/Applications`, and launch it:
 ```bash
+git clone https://github.com/rsimenok/graviton.git
+cd graviton
 ./scripts/build_app.sh --install
 ```
 
@@ -127,9 +129,11 @@ Sources/Graviton/
 │   ├── TimePeriod.swift               # Date-range filtering logic
 │   ├── ModelPricing.swift             # Model pricing rules & currency calculations
 │   ├── ModelQuota.swift               # Quota groups, buckets, and reset timestamps
-│   └── ModelUsage.swift               # Aggregated per-model statistics & color palette
+│   ├── ModelUsage.swift               # Aggregated per-model statistics & color palette
+│   └── MonthlyHistory.swift           # Monthly token & cost records for multi-year tracking
 ├── Services/
 │   ├── LaunchAtLoginManager.swift     # macOS 14+ SMAppService login item controller
+│   ├── HistoryStore.swift             # Local JSON persistence & migration for annual history
 │   ├── UnifiedScanner.swift           # Central coordinator aggregating all surfaces
 │   ├── TranscriptScanner.swift        # Streaming parser for desktop transcript.jsonl
 │   ├── SQLiteConversationScanner.swift# SQLite + wire-format Protobuf decoder for CLI & IDE
@@ -141,11 +145,12 @@ Sources/Graviton/
 └── Views/
     ├── StatusItemLabel.swift          # Menu bar icon & dynamic label formatting
     ├── DashboardView.swift            # Main popover UI with period & surface tabs
-    ├── HeroStatsCard.swift            # Primary summary card for total tokens & cost
-    ├── MetricCardView.swift           # 2x2 grid for Input / Cache / Output / Efficiency
+    ├── HeroStatsCard.swift            # Primary summary card & 2x2 metric grid
     ├── ModelUsageRowView.swift        # Model cards & proportional distribution bar
     ├── SessionRowView.swift           # Session list item with colored surface badges
-    └── SettingsSheet.swift            # Preferences sheet, directory status & sync
+    ├── HistoryView.swift              # Annual history view with Swift Charts bar charts
+    ├── SettingsSheet.swift            # Preferences sheet, directory status & sync
+    └── FocusRingCleaner.swift         # AppKit utility removing default macOS button rings
 ```
 
 ---
