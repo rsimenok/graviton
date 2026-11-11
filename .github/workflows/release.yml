@@ -3,13 +3,13 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - '[0-9]+.*'
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (e.g. v1.1.0)'
+        description: 'Release tag (e.g. 1.1.0)'
         required: true
-        default: 'v1.1.0'
+        default: '1.1.0'
 
 permissions:
   contents: write
@@ -18,8 +18,6 @@ jobs:
   release:
     name: Build, Sign, Notarize & Release
     runs-on: macos-14
-    env:
-      KEYCHAIN_PATH: ${{ runner.temp }}/build.keychain
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -35,6 +33,8 @@ jobs:
           APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain"
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> $GITHUB_ENV
           KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
 
           echo "Creating ephemeral keychain..."
