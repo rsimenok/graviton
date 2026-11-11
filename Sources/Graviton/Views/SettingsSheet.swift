@@ -24,7 +24,7 @@ public struct SettingsSheet: View {
                         Text("Back")
                             .font(.system(size: 12, weight: .medium))
                     }
-                    .foregroundColor(.accentColor)
+                    .foregroundColor(.secondary)
                 }
                 .buttonStyle(.plain)
                 .frame(width: 50, alignment: .leading)
@@ -34,7 +34,7 @@ public struct SettingsSheet: View {
                 HStack(spacing: 5) {
                     Image(systemName: "gearshape.fill")
                         .font(.system(size: 12, weight: .bold))
-                        .foregroundColor(.accentColor)
+                        .foregroundColor(.secondary)
                     Text("Settings")
                         .font(.system(size: 13, weight: .bold))
                 }
