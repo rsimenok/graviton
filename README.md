@@ -29,8 +29,8 @@ Built entirely with **SwiftUI** and **AppKit** with a modern Liquid Glass aesthe
 | Overview (Tokens & Cost) | Models Analytics & Quotas |
 | :---: | :---: |
 | <img src="assets/dashboard.png" width="370" alt="Overview Dashboard" /> | <img src="assets/models.png" width="370" alt="Models Analytics & Quotas" /> |
-| **Annual & Monthly History** | **Sessions Log** |
-| <img src="assets/history.png" width="370" alt="Annual & Monthly History" /> | <img src="assets/sessions.png" width="370" alt="Sessions Log" /> |
+| **Sessions Log** | **Annual & Monthly History** |
+| <img src="assets/sessions.png" width="370" alt="Sessions Log" /> | <img src="assets/history.png" width="370" alt="Annual & Monthly History" /> |
 | **Settings & Preferences** | |
 | <img src="assets/settings.png" width="370" alt="Settings Sheet" /> | |
 
