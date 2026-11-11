@@ -1,6 +1,11 @@
 #!/bin/bash
 set -e
 
+# Ensure execution from repository root
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${REPO_ROOT}"
+
 # Script to build standalone Graviton.app for macOS
 
 APP_NAME="Graviton"
@@ -75,8 +80,15 @@ EOF
 # Create PkgInfo
 echo -n "APPL????" > "${CONTENTS_DIR}/PkgInfo"
 
-echo "🔏 Signing app bundle with ad-hoc signature..."
-codesign --force --deep --sign - "${BUNDLE_DIR}"
+if [ -n "$CODE_SIGN_IDENTITY" ]; then
+    echo "🔏 Signing app bundle with identity: ${CODE_SIGN_IDENTITY}..."
+    codesign --force --deep --options runtime --timestamp \
+        --entitlements "scripts/entitlements.plist" \
+        --sign "${CODE_SIGN_IDENTITY}" "${BUNDLE_DIR}"
+else
+    echo "🔏 Signing app bundle with ad-hoc signature..."
+    codesign --force --deep --sign - "${BUNDLE_DIR}"
+fi
 
 echo "✅ App bundle created successfully at ${BUNDLE_DIR}!"
 
@@ -88,6 +100,11 @@ cp -r "${BUNDLE_DIR}" "${DMG_TEMP_DIR}/"
 ln -s /Applications "${DMG_TEMP_DIR}/Applications"
 hdiutil create -volname "${APP_NAME}" -srcfolder "${DMG_TEMP_DIR}" -ov -format UDZO "build/${APP_NAME}.dmg"
 rm -rf "${DMG_TEMP_DIR}"
+
+if [ -n "$CODE_SIGN_IDENTITY" ]; then
+    echo "🔏 Signing DMG with identity: ${CODE_SIGN_IDENTITY}..."
+    codesign --force --sign "${CODE_SIGN_IDENTITY}" --timestamp "build/${APP_NAME}.dmg"
+fi
 
 echo "🗜️ Creating ZIP archives..."
 (cd build && rm -f "${APP_NAME}.zip" "${APP_NAME}-v1.1.0.zip" "${APP_NAME}.app.zip" && zip -rq "${APP_NAME}.zip" "${APP_NAME}.app" && cp "${APP_NAME}.zip" "${APP_NAME}-v1.1.0.zip" && cp "${APP_NAME}.zip" "${APP_NAME}.app.zip")

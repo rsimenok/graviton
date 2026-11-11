@@ -1,0 +1,124 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v1.1.0)'
+        required: true
+        default: 'v1.1.0'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build, Sign, Notarize & Release
+    runs-on: macos-14
+    env:
+      KEYCHAIN_PATH: ${{ runner.temp }}/build.keychain
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Import Apple Certificate
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+
+          echo "Creating ephemeral keychain..."
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          echo "Importing Developer ID Certificate..."
+          echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" \
+            -k "$KEYCHAIN_PATH" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Append to keychain search list
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed -e 's/"//g')
+
+          # Extract identity
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep "Developer ID Application" | head -1 | awk -F '"' '{print $2}')
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::Developer ID Application certificate not found in imported keychain!"
+            exit 1
+          fi
+
+          echo "Using signing identity: $IDENTITY"
+          echo "CODE_SIGN_IDENTITY=$IDENTITY" >> $GITHUB_ENV
+
+      - name: Build and Package App Bundle & DMG
+        run: |
+          ./scripts/build_app.sh
+
+      - name: Notarize DMG
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          KEY_PATH=~/.appstoreconnect/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8
+          echo "$APPLE_API_KEY" > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+
+          echo "Submitting DMG to Apple Notarization Service..."
+          xcrun notarytool submit "build/Graviton.dmg" \
+            --key "$KEY_PATH" \
+            --key-id "$APPLE_API_KEY_ID" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait
+
+          rm -f "$KEY_PATH"
+
+      - name: Staple Notarization Ticket & Package Zip
+        run: |
+          echo "Stapling notarization ticket to DMG..."
+          xcrun stapler staple "build/Graviton.dmg"
+          xcrun stapler validate "build/Graviton.dmg"
+
+          echo "Stapling notarization ticket to App Bundle..."
+          xcrun stapler staple "build/Graviton.app"
+          xcrun stapler validate "build/Graviton.app"
+
+          echo "Re-packaging notarized Graviton.zip..."
+          (cd build && rm -f Graviton.zip Graviton-*.zip Graviton.app.zip && zip -rq Graviton.zip Graviton.app && cp Graviton.zip Graviton.app.zip)
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/Graviton.dmg
+            build/Graviton.zip
+          generate_release_notes: true
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          draft: false
+          prerelease: false
+
+      - name: Cleanup Keychain & Secrets
+        if: always()
+        run: |
+          TARGET_KEYCHAIN="${KEYCHAIN_PATH:-$RUNNER_TEMP/build.keychain}"
+          if [ -f "$TARGET_KEYCHAIN" ]; then
+            security delete-keychain "$TARGET_KEYCHAIN" 2>/dev/null || true
+          fi
+          rm -rf ~/.appstoreconnect/private_keys
+          rm -f "$RUNNER_TEMP/certificate.p12"
