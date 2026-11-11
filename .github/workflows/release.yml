@@ -1,4 +1,5 @@
 name: Release
+run-name: Release ${{ github.event.inputs.tag || github.ref_name }}
 
 on:
   push:
@@ -17,24 +18,51 @@ permissions:
 jobs:
   release:
     name: Build, Sign, Notarize & Release
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Select Xcode
+      - name: Ensure Xcode with Swift 6+
         run: |
-          sudo xcode-select -s /Applications/Xcode.app
+          if ! swift --version 2>/dev/null | grep -q "Swift version 6"; then
+            LATEST_XCODE=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -n 1 || true)
+            if [ -n "$LATEST_XCODE" ] && [ -d "$LATEST_XCODE/Contents/Developer" ]; then
+              echo "Selecting Xcode at $LATEST_XCODE..."
+              sudo xcode-select -s "$LATEST_XCODE/Contents/Developer"
+            fi
+          fi
+          xcodebuild -version
+          swift --version
+
+      - name: Validate Required Secrets
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          MISSING=0
+          for SECRET_NAME in APPLE_CERTIFICATE_BASE64 APPLE_CERTIFICATE_PASSWORD APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER; do
+            if [ -z "${!SECRET_NAME}" ]; then
+              echo "::error::Missing required GitHub Secret: $SECRET_NAME (see docs/RELEASE_SIGNING_GUIDE.md)"
+              MISSING=1
+            fi
+          done
+          if [ "$MISSING" -ne 0 ]; then
+            exit 1
+          fi
 
       - name: Import Apple Certificate
         env:
           APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
-          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain"
-          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> $GITHUB_ENV
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
           KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
 
           echo "Creating ephemeral keychain..."
@@ -42,8 +70,18 @@ jobs:
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-          echo "Importing Developer ID Certificate..."
-          echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          echo "Decoding and importing Developer ID Certificate..."
+          printf '%s' "$APPLE_CERTIFICATE_BASE64" | tr -d '[:space:]' | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          if [ ! -s "$RUNNER_TEMP/certificate.p12" ]; then
+            echo "::error::Decoded certificate.p12 is empty! Check APPLE_CERTIFICATE_BASE64."
+            exit 1
+          fi
+
+          # Import Apple Developer ID G2 intermediate certificate to ensure complete trust chain
+          if curl -fsSL https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer -o "$RUNNER_TEMP/DeveloperIDG2CA.cer"; then
+            security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$KEYCHAIN_PATH" -T /usr/bin/codesign || true
+          fi
+
           security import "$RUNNER_TEMP/certificate.p12" \
             -k "$KEYCHAIN_PATH" \
             -P "$APPLE_CERTIFICATE_PASSWORD" \
@@ -51,22 +89,24 @@ jobs:
             -T /usr/bin/security
 
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security default-keychain -s "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
 
-          # Append to keychain search list
-          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed -e 's/"//g')
-
-          # Extract identity
-          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep "Developer ID Application" | head -1 | awk -F '"' '{print $2}')
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep "Developer ID Application" | head -1 | awk -F '"' '{print $2}' || true)
           if [ -z "$IDENTITY" ]; then
-            echo "::error::Developer ID Application certificate not found in imported keychain!"
+            echo "::error::Valid 'Developer ID Application' certificate not found in imported keychain! Available identities:"
+            security find-identity -p codesigning "$KEYCHAIN_PATH" || true
             exit 1
           fi
 
           echo "Using signing identity: $IDENTITY"
-          echo "CODE_SIGN_IDENTITY=$IDENTITY" >> $GITHUB_ENV
+          echo "CODE_SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
 
       - name: Build and Package App Bundle & DMG
         run: |
+          RAW_TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          export APP_VERSION="${RAW_TAG#v}"
+          echo "Building Graviton version $APP_VERSION (tag: $RAW_TAG)..."
           ./scripts/build_app.sh
 
       - name: Notarize DMG
@@ -77,15 +117,36 @@ jobs:
         run: |
           mkdir -p ~/.appstoreconnect/private_keys
           KEY_PATH=~/.appstoreconnect/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8
-          echo "$APPLE_API_KEY" > "$KEY_PATH"
+          printf '%s\n' "$APPLE_API_KEY" > "$KEY_PATH"
           chmod 600 "$KEY_PATH"
 
           echo "Submitting DMG to Apple Notarization Service..."
+          set +e
           xcrun notarytool submit "build/Graviton.dmg" \
             --key "$KEY_PATH" \
             --key-id "$APPLE_API_KEY_ID" \
             --issuer "$APPLE_API_ISSUER" \
-            --wait
+            --wait \
+            --output-format json | tee "$RUNNER_TEMP/notary.json"
+          NOTARY_EXIT=${PIPESTATUS[0]}
+          set -e
+
+          STATUS=$(python3 -c "import json; print(json.load(open('$RUNNER_TEMP/notary.json')).get('status', ''))" 2>/dev/null || echo "")
+          SUBMISSION_ID=$(python3 -c "import json; print(json.load(open('$RUNNER_TEMP/notary.json')).get('id', ''))" 2>/dev/null || echo "")
+          echo "Notarization status: $STATUS (ID: $SUBMISSION_ID)"
+
+          if [ "$NOTARY_EXIT" -ne 0 ] || [ "$STATUS" != "Accepted" ]; then
+            echo "::error::Apple Notarization failed with status: $STATUS"
+            if [ -n "$SUBMISSION_ID" ]; then
+              echo "Fetching detailed notarization log from Apple..."
+              xcrun notarytool log "$SUBMISSION_ID" \
+                --key "$KEY_PATH" \
+                --key-id "$APPLE_API_KEY_ID" \
+                --issuer "$APPLE_API_ISSUER" || true
+            fi
+            rm -f "$KEY_PATH"
+            exit 1
+          fi
 
           rm -f "$KEY_PATH"
 
@@ -99,8 +160,10 @@ jobs:
           xcrun stapler staple "build/Graviton.app"
           xcrun stapler validate "build/Graviton.app"
 
-          echo "Re-packaging notarized Graviton.zip..."
-          (cd build && rm -f Graviton.zip Graviton-*.zip Graviton.app.zip && zip -rq Graviton.zip Graviton.app && cp Graviton.zip Graviton.app.zip)
+          echo "Re-packaging notarized Graviton.zip with ditto..."
+          rm -f build/Graviton.zip build/Graviton-*.zip build/Graviton.app.zip
+          ditto -c -k --keepParent "build/Graviton.app" "build/Graviton.zip"
+          cp "build/Graviton.zip" "build/Graviton.app.zip"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -116,9 +179,8 @@ jobs:
       - name: Cleanup Keychain & Secrets
         if: always()
         run: |
-          TARGET_KEYCHAIN="${KEYCHAIN_PATH:-$RUNNER_TEMP/build.keychain}"
-          if [ -f "$TARGET_KEYCHAIN" ]; then
-            security delete-keychain "$TARGET_KEYCHAIN" 2>/dev/null || true
-          fi
+          TARGET_KEYCHAIN="${KEYCHAIN_PATH:-$RUNNER_TEMP/build.keychain-db}"
+          security delete-keychain "$TARGET_KEYCHAIN" 2>/dev/null || true
+          rm -f "${TARGET_KEYCHAIN}"*
           rm -rf ~/.appstoreconnect/private_keys
-          rm -f "$RUNNER_TEMP/certificate.p12"
+          rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP/notary.json"

@@ -9,6 +9,7 @@ cd "${REPO_ROOT}"
 # Script to build standalone Graviton.app for macOS
 
 APP_NAME="Graviton"
+APP_VERSION="${APP_VERSION:-1.1.0}"
 BUNDLE_ID="com.smnk.graviton"
 BUNDLE_DIR="build/${APP_NAME}.app"
 CONTENTS_DIR="${BUNDLE_DIR}/Contents"
@@ -23,22 +24,27 @@ mkdir -p "$CLANG_MODULE_CACHE_PATH"
 
 echo "🔨 Building release binary with Swift PM..."
 TMPDIR=/tmp swift build -c release --disable-sandbox
+BIN_DIR=$(TMPDIR=/tmp swift build -c release --disable-sandbox --show-bin-path 2>/dev/null || echo "")
 
-echo "📦 Creating macOS App Bundle at ${BUNDLE_DIR}..."
+echo "📦 Creating macOS App Bundle at ${BUNDLE_DIR} (v${APP_VERSION})..."
 rm -rf "${BUNDLE_DIR}"
 mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
 
-# Copy binary and resources
-if [ -f ".build/out/Products/Release/${APP_NAME}" ]; then
+# Copy binary
+if [ -n "${BIN_DIR}" ] && [ -f "${BIN_DIR}/${APP_NAME}" ]; then
+    cp "${BIN_DIR}/${APP_NAME}" "${MACOS_DIR}/${APP_NAME}"
+elif [ -f ".build/out/Products/Release/${APP_NAME}" ]; then
     cp ".build/out/Products/Release/${APP_NAME}" "${MACOS_DIR}/${APP_NAME}"
 elif [ -f ".build/release/${APP_NAME}" ]; then
     cp ".build/release/${APP_NAME}" "${MACOS_DIR}/${APP_NAME}"
+else
+    echo "❌ Error: Release binary '${APP_NAME}' not found in .build!"
+    exit 1
 fi
 
-if [ -d ".build/out/Products/Release/Graviton_Graviton.bundle" ]; then
-    cp -R ".build/out/Products/Release/Graviton_Graviton.bundle" "${RESOURCES_DIR}/"
-fi
+chmod +x "${MACOS_DIR}/${APP_NAME}"
 
+# Copy app resources directly into Contents/Resources
 if [ -d "Sources/Graviton/Resources" ]; then
     cp -R "Sources/Graviton/Resources/"* "${RESOURCES_DIR}/"
 fi
@@ -64,7 +70,7 @@ cat > "${CONTENTS_DIR}/Info.plist" <<EOF
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.1.0</string>
+    <string>${APP_VERSION}</string>
     <key>CFBundleVersion</key>
     <string>3</string>
     <key>LSMinimumSystemVersion</key>
@@ -80,9 +86,12 @@ EOF
 # Create PkgInfo
 echo -n "APPL????" > "${CONTENTS_DIR}/PkgInfo"
 
+# Clear any extended attributes before signing
+xattr -cr "${BUNDLE_DIR}" 2>/dev/null || true
+
 if [ -n "$CODE_SIGN_IDENTITY" ]; then
     echo "🔏 Signing app bundle with identity: ${CODE_SIGN_IDENTITY}..."
-    codesign --force --deep --options runtime --timestamp \
+    codesign --force --options runtime --timestamp \
         --entitlements "scripts/entitlements.plist" \
         --sign "${CODE_SIGN_IDENTITY}" "${BUNDLE_DIR}"
 else
@@ -90,24 +99,44 @@ else
     codesign --force --deep --sign - "${BUNDLE_DIR}"
 fi
 
-echo "✅ App bundle created successfully at ${BUNDLE_DIR}!"
+echo "🔍 Verifying app bundle signature..."
+codesign --verify --deep --strict --verbose=2 "${BUNDLE_DIR}"
+echo "✅ App bundle created and verified at ${BUNDLE_DIR}!"
 
 echo "📀 Creating DMG installer at build/${APP_NAME}.dmg..."
 DMG_TEMP_DIR="build/dmg_temp"
 rm -rf "${DMG_TEMP_DIR}" "build/${APP_NAME}.dmg"
 mkdir -p "${DMG_TEMP_DIR}"
-cp -r "${BUNDLE_DIR}" "${DMG_TEMP_DIR}/"
+cp -R "${BUNDLE_DIR}" "${DMG_TEMP_DIR}/"
 ln -s /Applications "${DMG_TEMP_DIR}/Applications"
-hdiutil create -volname "${APP_NAME}" -srcfolder "${DMG_TEMP_DIR}" -ov -format UDZO "build/${APP_NAME}.dmg"
+
+DMG_CREATED=0
+for attempt in 1 2 3; do
+    if hdiutil create -volname "${APP_NAME}" -srcfolder "${DMG_TEMP_DIR}" -ov -format UDZO "build/${APP_NAME}.dmg"; then
+        DMG_CREATED=1
+        break
+    fi
+    echo "⚠️ hdiutil create attempt ${attempt} failed, retrying in 2s..."
+    sleep 2
+done
 rm -rf "${DMG_TEMP_DIR}"
+
+if [ "$DMG_CREATED" -ne 1 ]; then
+    echo "❌ Error: Failed to create DMG after 3 attempts."
+    exit 1
+fi
 
 if [ -n "$CODE_SIGN_IDENTITY" ]; then
     echo "🔏 Signing DMG with identity: ${CODE_SIGN_IDENTITY}..."
     codesign --force --sign "${CODE_SIGN_IDENTITY}" --timestamp "build/${APP_NAME}.dmg"
+    codesign --verify --verbose=2 "build/${APP_NAME}.dmg"
 fi
 
-echo "🗜️ Creating ZIP archives..."
-(cd build && rm -f "${APP_NAME}.zip" "${APP_NAME}-v1.1.0.zip" "${APP_NAME}.app.zip" && zip -rq "${APP_NAME}.zip" "${APP_NAME}.app" && cp "${APP_NAME}.zip" "${APP_NAME}-v1.1.0.zip" && cp "${APP_NAME}.zip" "${APP_NAME}.app.zip")
+echo "🗜️ Creating ZIP archives with ditto..."
+rm -f "build/${APP_NAME}.zip" "build/${APP_NAME}-v${APP_VERSION}.zip" "build/${APP_NAME}.app.zip"
+ditto -c -k --keepParent "${BUNDLE_DIR}" "build/${APP_NAME}.zip"
+cp "build/${APP_NAME}.zip" "build/${APP_NAME}-v${APP_VERSION}.zip"
+cp "build/${APP_NAME}.zip" "build/${APP_NAME}.app.zip"
 
 echo "🎉 All release artifacts created in build/:"
 ls -lh build/*.dmg build/*.zip
