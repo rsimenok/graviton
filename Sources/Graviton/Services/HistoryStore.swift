@@ -12,8 +12,19 @@ public final class HistoryStore: @unchecked Sendable {
             self.fileURL = url
         } else {
             let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+                .appendingPathComponent("Graviton", isDirectory: true)
+            let newURL = appSupport.appendingPathComponent("monthly_history.json")
+
+            // Backward compatibility: migrate legacy AGYTokenTracker history if present
+            let legacySupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
                 .appendingPathComponent("AGYTokenTracker", isDirectory: true)
-            self.fileURL = appSupport.appendingPathComponent("monthly_history.json")
+            let legacyURL = legacySupport.appendingPathComponent("monthly_history.json")
+            if !FileManager.default.fileExists(atPath: newURL.path), FileManager.default.fileExists(atPath: legacyURL.path) {
+                try? FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
+                try? FileManager.default.copyItem(at: legacyURL, to: newURL)
+            }
+
+            self.fileURL = newURL
         }
         self.data = MonthlyHistoryData()
         load()

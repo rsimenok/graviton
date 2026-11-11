@@ -2,22 +2,22 @@
 import PackageDescription
 
 let package = Package(
-    name: "AGYTokenTracker",
+    name: "Graviton",
     platforms: [
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "AGYTokenTracker", targets: ["AGYTokenTracker"])
+        .executable(name: "Graviton", targets: ["Graviton"])
     ],
     targets: [
         .executableTarget(
-            name: "AGYTokenTracker",
-            path: "Sources/AGYTokenTracker"
+            name: "Graviton",
+            path: "Sources/Graviton"
         ),
         .testTarget(
-            name: "AGYTokenTrackerTests",
-            dependencies: ["AGYTokenTracker"],
-            path: "Tests/AGYTokenTrackerTests"
+            name: "GravitonTests",
+            dependencies: ["Graviton"],
+            path: "Tests/GravitonTests"
         )
     ]
 )

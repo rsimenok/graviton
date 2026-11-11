@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import AGYTokenTracker
+@testable import Graviton
 
 @Suite("TrackerViewModel Launch at Login Tests")
 struct TrackerViewModelLaunchAtLoginTests {

@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 
 @main
-struct AGYTokenTrackerApp: App {
+struct GravitonApp: App {
     @StateObject private var tracker = TrackerViewModel()
 
     init() {

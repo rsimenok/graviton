@@ -1,10 +1,10 @@
 import Testing
 import Foundation
 import SQLite3
-@testable import AGYTokenTracker
+@testable import Graviton
 
-@Suite("AGY Token Tracker Tests")
-struct AGYTokenTrackerTests {
+@Suite("Graviton Tests")
+struct GravitonTests {
 
     @Test("TimePeriod matching logic")
     func testTimePeriodMatching() {

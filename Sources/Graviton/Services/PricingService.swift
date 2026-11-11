@@ -14,7 +14,7 @@ public final class PricingService: @unchecked Sendable {
 
     private init() {
         let cachesDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-        let appCacheDir = cachesDir.appendingPathComponent("AGYTokenTracker", isDirectory: true)
+        let appCacheDir = cachesDir.appendingPathComponent("Graviton", isDirectory: true)
         try? FileManager.default.createDirectory(at: appCacheDir, withIntermediateDirectories: true)
         self.cacheURL = appCacheDir.appendingPathComponent("pricing-litellm.json")
 

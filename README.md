@@ -1,10 +1,10 @@
-# AGY Token Tracker (Antigravity Unified Menu Bar Monitor) ⚡️
+# Graviton: Antigravity Token Tracker ⚡️
 
 [![macOS 14.0+](https://img.shields.io/badge/macOS-14.0%2B-blue.svg)](https://apple.com)
-[![Swift 5.9+](https://img.shields.io/badge/Swift-5.9%2B-orange.svg)](https://swift.org)
+[![Swift 6.0+](https://img.shields.io/badge/Swift-6.0%2B-orange.svg)](https://swift.org)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-**AGY Token Tracker** is a lightweight, native macOS menu bar application designed to monitor token usage, prompt caching efficiency, real-time expenses, and rate limit quotas across the entire **Google Antigravity** ecosystem:
+**Graviton** is a lightweight, native macOS menu bar application designed to monitor token usage, prompt caching efficiency, real-time expenses, and rate limit quotas across the entire **Google Antigravity** ecosystem:
 
 1. 🖥️ **Antigravity 2.0 (Desktop)**
 2. 💻 **Antigravity CLI (`agy`)**
@@ -38,10 +38,13 @@ Built entirely with **SwiftUI** and **AppKit** with a modern Liquid Glass aesthe
 - **Antigravity CLI (`agy`)**: Scans console sessions and trajectory databases from `~/.gemini/antigravity-cli`.
 - **Antigravity IDE**: Parses IDE extensions and workspace conversations from `~/.gemini/antigravity-ide`.
 
+### 🚀 System & Startup Integration
+- **Launch at Login**: Native macOS 14+ background startup integration via `SMAppService.mainApp`. Enable or disable auto-start directly in Settings.
+
 ### ⏱️ Flexible Time Horizons & Historical Analytics
 - **Today**, **Yesterday**, **This Week**, **This Month**, **All Time**
 - 📅 **Annual & Monthly History**: Dedicated **History** tab featuring an annual year switcher (`< 2026 >`), annual hero summary, interactive monthly spending bar charts (Swift Charts), and granular month-by-month token and model breakdown cards.
-- 💾 **Persistent Aggregation**: Saves monthly aggregates locally (`~/Library/Application Support/AGYTokenTracker/monthly_history.json`) for instant zero-latency loads and permanent preservation even if old session files are later purged.
+- 💾 **Persistent Aggregation**: Saves monthly aggregates locally (`~/Library/Application Support/Graviton/monthly_history.json`) for instant zero-latency loads and permanent preservation even if old session files are later purged.
 
 ### 📊 Granular Token & Cache Accounting
 - 📥 **Input Tokens**: Fresh context and user prompts.
@@ -82,33 +85,33 @@ Built entirely with **SwiftUI** and **AppKit** with a modern Liquid Glass aesthe
 - macOS 14.0 (Sonoma) or newer (Apple Silicon & Intel).
 - Xcode 15+ or Command Line Tools (`swift`).
 
-### 1. Run in Development Mode
-Clone the repository and launch directly:
+### 1. One-Command Build & Install (Recommended)
+Build the production `.app` bundle, install it directly into `/Applications`, and launch it:
 ```bash
-git clone https://github.com/rsimenok/agy-token-tracker.git
-cd agy-token-tracker
-swift run
+./scripts/build_app.sh --install
 ```
 
-### 2. Run Test Suite
-```bash
-swift test
-```
-
-### 3. Build Standalone `.app` Bundle
-Use the included build script to package a production `.app`:
+### 2. Standalone DMG Installer
+To build release packages (`.dmg`, `.zip`, `.app`):
 ```bash
 ./scripts/build_app.sh
 ```
-The output bundle will be located at `build/AGYTokenTracker.app`.
+Output artifacts are saved in `build/`:
+- `build/Graviton.dmg` — Drag & drop installer into `/Applications`.
+- `build/Graviton.app` — Standalone application bundle.
 
-Launch it immediately:
+> **Note on Launch at Login**: To enable macOS system background startup, Graviton must be running from `/Applications`.
+
+### 3. Run in Development Mode
+To run directly from the command line during development:
 ```bash
-open build/AGYTokenTracker.app
+swift run
 ```
-Or copy it to your Applications folder:
+*(In development mode outside an application bundle, background Launch at Login registration is safely disabled).*
+
+### 4. Run Test Suite
 ```bash
-cp -r build/AGYTokenTracker.app /Applications/
+swift test
 ```
 
 ---
@@ -116,8 +119,8 @@ cp -r build/AGYTokenTracker.app /Applications/
 ## 📂 Project Architecture
 
 ```text
-Sources/AGYTokenTracker/
-├── AGYTokenTracker.swift              # App entry point (@main) with MenuBarExtra (.window)
+Sources/Graviton/
+├── GravitonApp.swift                  # App entry point (@main) with MenuBarExtra (.window)
 ├── Models/
 │   ├── AppSurface.swift               # Surface definitions (.all, .desktop, .cli, .ide)
 │   ├── TokenStep.swift                # Individual step metrics & SessionSummary
@@ -126,6 +129,7 @@ Sources/AGYTokenTracker/
 │   ├── ModelQuota.swift               # Quota groups, buckets, and reset timestamps
 │   └── ModelUsage.swift               # Aggregated per-model statistics & color palette
 ├── Services/
+│   ├── LaunchAtLoginManager.swift     # macOS 14+ SMAppService login item controller
 │   ├── UnifiedScanner.swift           # Central coordinator aggregating all surfaces
 │   ├── TranscriptScanner.swift        # Streaming parser for desktop transcript.jsonl
 │   ├── SQLiteConversationScanner.swift# SQLite + wire-format Protobuf decoder for CLI & IDE
@@ -149,7 +153,7 @@ Sources/AGYTokenTracker/
 ## 🤝 Contributing
 
 Contributions, issue reports, and feature suggestions are welcome!
-Feel free to open an issue or submit a Pull Request on [GitHub](https://github.com/rsimenok/agy-token-tracker).
+Feel free to open an issue or submit a Pull Request on [GitHub](https://github.com/rsimenok/graviton).
 
 ---
 

@@ -1,9 +1,10 @@
 #!/bin/bash
 set -e
 
-# Script to build standalone AGYTokenTracker.app for macOS
+# Script to build standalone Graviton.app for macOS
 
-APP_NAME="AGYTokenTracker"
+APP_NAME="Graviton"
+BUNDLE_ID="com.smnk.graviton"
 BUNDLE_DIR="build/${APP_NAME}.app"
 CONTENTS_DIR="${BUNDLE_DIR}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
@@ -34,17 +35,17 @@ cat > "${CONTENTS_DIR}/Info.plist" <<EOF
     <key>CFBundleExecutable</key>
     <string>${APP_NAME}</string>
     <key>CFBundleIdentifier</key>
-    <string>com.antigravity.AGYTokenTracker</string>
+    <string>${BUNDLE_ID}</string>
     <key>CFBundleName</key>
-    <string>AGY Token Tracker</string>
+    <string>${APP_NAME}</string>
     <key>CFBundleDisplayName</key>
-    <string>AGY Token Tracker</string>
+    <string>${APP_NAME}</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.1</string>
+    <string>1.1.0</string>
     <key>CFBundleVersion</key>
-    <string>2</string>
+    <string>3</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>LSUIElement</key>
@@ -69,13 +70,27 @@ rm -rf "${DMG_TEMP_DIR}" "build/${APP_NAME}.dmg"
 mkdir -p "${DMG_TEMP_DIR}"
 cp -r "${BUNDLE_DIR}" "${DMG_TEMP_DIR}/"
 ln -s /Applications "${DMG_TEMP_DIR}/Applications"
-hdiutil create -volname "AGY Token Tracker" -srcfolder "${DMG_TEMP_DIR}" -ov -format UDZO "build/${APP_NAME}.dmg"
+hdiutil create -volname "${APP_NAME}" -srcfolder "${DMG_TEMP_DIR}" -ov -format UDZO "build/${APP_NAME}.dmg"
 rm -rf "${DMG_TEMP_DIR}"
 
 echo "🗜️ Creating ZIP archives..."
-(cd build && rm -f "${APP_NAME}.zip" "${APP_NAME}-v1.0.1.zip" "${APP_NAME}.app.zip" && zip -rq "${APP_NAME}.zip" "${APP_NAME}.app" && cp "${APP_NAME}.zip" "${APP_NAME}-v1.0.1.zip" && cp "${APP_NAME}.zip" "${APP_NAME}.app.zip")
+(cd build && rm -f "${APP_NAME}.zip" "${APP_NAME}-v1.1.0.zip" "${APP_NAME}.app.zip" && zip -rq "${APP_NAME}.zip" "${APP_NAME}.app" && cp "${APP_NAME}.zip" "${APP_NAME}-v1.1.0.zip" && cp "${APP_NAME}.zip" "${APP_NAME}.app.zip")
 
 echo "🎉 All release artifacts created in build/:"
 ls -lh build/*.dmg build/*.zip
-echo "👉 You can run it now with: open ${BUNDLE_DIR}"
-echo "👉 Or copy to Applications: cp -r ${BUNDLE_DIR} /Applications/"
+
+if [ "$1" = "--install" ] || [ "$2" = "--install" ]; then
+    echo "🚀 Installing ${APP_NAME}.app into /Applications..."
+    killall "${APP_NAME}" 2>/dev/null || true
+    killall "AGYTokenTracker" 2>/dev/null || true
+    sleep 0.5
+    rm -rf "/Applications/${APP_NAME}.app"
+    rm -rf "/Applications/AGYTokenTracker.app"
+    cp -R "${BUNDLE_DIR}" /Applications/
+    echo "✅ Successfully installed! Launching /Applications/${APP_NAME}.app..."
+    open "/Applications/${APP_NAME}.app"
+else
+    echo "👉 You can run it now with: open ${BUNDLE_DIR}"
+    echo "👉 Or install to Applications: ./scripts/build_app.sh --install"
+    echo "👉 Or manually: cp -r ${BUNDLE_DIR} /Applications/"
+fi

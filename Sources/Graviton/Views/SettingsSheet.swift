@@ -124,7 +124,7 @@ public struct SettingsSheet: View {
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text("Launch at Login")
                                             .font(.system(size: 11, weight: .semibold))
-                                        Text("Start AGY Token Tracker automatically when you log in to your Mac.")
+                                        Text("Start Graviton automatically when you log in to your Mac.")
                                             .font(.system(size: 9.5))
                                             .foregroundColor(.secondary)
                                     }
@@ -242,7 +242,7 @@ public struct SettingsSheet: View {
                     .foregroundColor(.secondary.opacity(0.4))
 
                 Button(action: {
-                    if let url = URL(string: "https://github.com/rsimenok/agy-token-tracker") {
+                    if let url = URL(string: "https://github.com/rsimenok/graviton") {
                         NSWorkspace.shared.open(url)
                         dismissWindow()
                     }
@@ -281,9 +281,9 @@ public struct SettingsSheet: View {
 
     private var appVersionString: String {
         if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
-            return "AGYTokenTracker v\(version)"
+            return "Graviton v\(version)"
         }
-        return "AGYTokenTracker"
+        return "Graviton"
     }
 
     private func dismissWindow() {
