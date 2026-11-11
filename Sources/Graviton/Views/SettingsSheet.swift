@@ -111,27 +111,30 @@ public struct SettingsSheet: View {
                             .tracking(0.5)
 
                         VStack(alignment: .leading, spacing: 6) {
-                            Toggle(isOn: Binding(
-                                get: { tracker.isLaunchAtLoginEnabled },
-                                set: { tracker.setLaunchAtLogin(enabled: $0) }
-                            )) {
-                                HStack(spacing: 8) {
-                                    Image(systemName: "power")
-                                        .font(.system(size: 12, weight: .semibold))
-                                        .foregroundColor(.accentColor)
-                                        .frame(width: 16)
+                            HStack(spacing: 8) {
+                                Image(systemName: "power")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundColor(.accentColor)
+                                    .frame(width: 16)
 
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Launch at Login")
-                                            .font(.system(size: 11, weight: .semibold))
-                                        Text("Start Graviton automatically when you log in to your Mac.")
-                                            .font(.system(size: 9.5))
-                                            .foregroundColor(.secondary)
-                                    }
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Launch at Login")
+                                        .font(.system(size: 11, weight: .semibold))
+                                    Text("Start Graviton automatically when you log in to your Mac.")
+                                        .font(.system(size: 9.5))
+                                        .foregroundColor(.secondary)
                                 }
+
+                                Spacer()
+
+                                Toggle("", isOn: Binding(
+                                    get: { tracker.isLaunchAtLoginEnabled },
+                                    set: { tracker.setLaunchAtLogin(enabled: $0) }
+                                ))
+                                .toggleStyle(.switch)
+                                .labelsHidden()
+                                .disabled(!tracker.isLaunchAtLoginAvailable)
                             }
-                            .toggleStyle(.switch)
-                            .disabled(!tracker.isLaunchAtLoginAvailable)
 
                             if !tracker.isLaunchAtLoginAvailable {
                                 Text("Available when running from an installed application bundle.")
@@ -146,6 +149,7 @@ public struct SettingsSheet: View {
                             }
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(10)
                     .background(
                         RoundedRectangle(cornerRadius: 8)
