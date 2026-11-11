@@ -488,7 +488,7 @@ public final class TrackerViewModel: ObservableObject {
         case .tokens:
             return Self.formatCompact(totalTokens)
         case .cost:
-            return Self.formatCurrency(totalCost)
+            return Self.formatMenuBarCurrency(totalCost)
         case .compact:
             return ""
         }
@@ -542,6 +542,16 @@ public final class TrackerViewModel: ObservableObject {
             return String(format: "$%.4f", amount)
         } else if amount < 10.0 {
             return String(format: "$%.3f", amount)
+        } else {
+            return String(format: "$%.2f", amount)
+        }
+    }
+
+    nonisolated public static func formatMenuBarCurrency(_ amount: Double) -> String {
+        if amount <= 0 {
+            return "$0.00"
+        } else if amount < 0.01 {
+            return "<$0.01"
         } else {
             return String(format: "$%.2f", amount)
         }

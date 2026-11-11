@@ -1,8 +1,14 @@
-# Graviton: Antigravity Token Tracker ⚡️
+<p align="center">
+  <img src="assets/app_icon.png" width="128" height="128" alt="Graviton App Icon" />
+</p>
 
-[![macOS 14.0+](https://img.shields.io/badge/macOS-14.0%2B-blue.svg)](https://apple.com)
-[![Swift 6.0+](https://img.shields.io/badge/Swift-6.0%2B-orange.svg)](https://swift.org)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+<h1 align="center">Graviton: Antigravity Token Tracker ⚡️</h1>
+
+<p align="center">
+  <a href="https://apple.com"><img src="https://img.shields.io/badge/macOS-14.0%2B-blue.svg" alt="macOS 14.0+" /></a>
+  <a href="https://swift.org"><img src="https://img.shields.io/badge/Swift-6.0%2B-orange.svg" alt="Swift 6.0+" /></a>
+  <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0" /></a>
+</p>
 
 **Graviton** is a lightweight, native macOS menu bar application designed to monitor token usage, prompt caching efficiency, real-time expenses, and rate limit quotas across the entire **Google Antigravity** ecosystem:
 

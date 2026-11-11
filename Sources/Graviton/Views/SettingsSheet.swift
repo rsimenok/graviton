@@ -65,11 +65,28 @@ public struct SettingsSheet: View {
 
                             // Live preview of menu bar
                             HStack(spacing: 4) {
-                                Image(systemName: "brain.fill")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.primary)
+                                if tracker.displayMode == .compact || tracker.menuBarTitle.isEmpty {
+                                    let menuIcon: NSImage? = {
+                                        #if SWIFT_PACKAGE
+                                        return Bundle.main.image(forResource: "MenuBarIcon") ?? Bundle.module.image(forResource: "MenuBarIcon")
+                                        #else
+                                        return Bundle.main.image(forResource: "MenuBarIcon")
+                                        #endif
+                                    }()
 
-                                if tracker.displayMode != .compact && !tracker.menuBarTitle.isEmpty {
+                                    if let icon = menuIcon {
+                                        Image(nsImage: icon)
+                                            .renderingMode(.template)
+                                            .resizable()
+                                            .aspectRatio(contentMode: .fit)
+                                            .frame(width: 12, height: 12)
+                                            .foregroundColor(.primary)
+                                    } else {
+                                        Image(systemName: "bolt.fill")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(.primary)
+                                    }
+                                } else {
                                     Text(tracker.menuBarTitle)
                                         .font(.system(size: 10, weight: .semibold, design: .rounded))
                                         .foregroundColor(.primary)
@@ -83,13 +100,13 @@ public struct SettingsSheet: View {
 
                         Picker("Display Mode", selection: $tracker.displayMode) {
                             Text("Tokens (\(TrackerViewModel.formatCompact(tracker.totalTokens)))").tag(StatusDisplayMode.tokens)
-                            Text("Cost (\(TrackerViewModel.formatCurrency(tracker.totalCost)))").tag(StatusDisplayMode.cost)
+                            Text("Cost (\(TrackerViewModel.formatMenuBarCurrency(tracker.totalCost)))").tag(StatusDisplayMode.cost)
                             Text("Icon Only").tag(StatusDisplayMode.compact)
                         }
                         .pickerStyle(.segmented)
                         .labelsHidden()
 
-                        Text("Choose whether the top menu bar shows token count, estimated cost in USD, or only the brain icon.")
+                        Text("Choose whether the top menu bar shows token count, estimated cost in USD, or only the app icon.")
                             .font(.system(size: 9.5))
                             .foregroundColor(.secondary)
                     }

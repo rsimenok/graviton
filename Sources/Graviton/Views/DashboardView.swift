@@ -51,20 +51,10 @@ public struct DashboardView: View {
             // Pinned Top Controls
             VStack(spacing: 7) {
                 // Header Bar
-                HStack(spacing: 8) {
-                    Image(systemName: "bolt.shield.fill")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(
-                            LinearGradient(
-                                colors: [.yellow, .orange],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-
-                    VStack(alignment: .leading, spacing: 1) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 1.5) {
                         Text("Graviton")
-                            .font(.system(size: 13, weight: .bold))
+                            .font(.system(size: 14, weight: .bold))
                         Text("Antigravity Token & Cost Monitor")
                             .font(.system(size: 10))
                             .foregroundColor(.secondary)

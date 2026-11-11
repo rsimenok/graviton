@@ -571,6 +571,17 @@ struct GravitonTests {
         #expect(TrackerViewModel.formatCompact(2_450_000_000_000) == "2.45T")
     }
 
+    @Test("TrackerViewModel formatMenuBarCurrency rounds to cents without thousandths")
+    func testFormatMenuBarCurrency() {
+        #expect(TrackerViewModel.formatMenuBarCurrency(0) == "$0.00")
+        #expect(TrackerViewModel.formatMenuBarCurrency(-1) == "$0.00")
+        #expect(TrackerViewModel.formatMenuBarCurrency(0.004) == "<$0.01")
+        #expect(TrackerViewModel.formatMenuBarCurrency(0.01) == "$0.01")
+        #expect(TrackerViewModel.formatMenuBarCurrency(7.786) == "$7.79")
+        #expect(TrackerViewModel.formatMenuBarCurrency(9.476) == "$9.48")
+        #expect(TrackerViewModel.formatMenuBarCurrency(120.5) == "$120.50")
+    }
+
     // MARK: - Protobuf Encoding Helpers for Tests
 
     private func encodeVarint(_ value: UInt64) -> Data {

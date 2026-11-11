@@ -12,7 +12,10 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "Graviton",
-            path: "Sources/Graviton"
+            path: "Sources/Graviton",
+            resources: [
+                .process("Resources")
+            ]
         ),
         .testTarget(
             name: "GravitonTests",

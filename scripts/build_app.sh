@@ -23,8 +23,20 @@ echo "📦 Creating macOS App Bundle at ${BUNDLE_DIR}..."
 rm -rf "${BUNDLE_DIR}"
 mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
 
-# Copy binary
-cp ".build/release/${APP_NAME}" "${MACOS_DIR}/${APP_NAME}"
+# Copy binary and resources
+if [ -f ".build/out/Products/Release/${APP_NAME}" ]; then
+    cp ".build/out/Products/Release/${APP_NAME}" "${MACOS_DIR}/${APP_NAME}"
+elif [ -f ".build/release/${APP_NAME}" ]; then
+    cp ".build/release/${APP_NAME}" "${MACOS_DIR}/${APP_NAME}"
+fi
+
+if [ -d ".build/out/Products/Release/Graviton_Graviton.bundle" ]; then
+    cp -R ".build/out/Products/Release/Graviton_Graviton.bundle" "${RESOURCES_DIR}/"
+fi
+
+if [ -d "Sources/Graviton/Resources" ]; then
+    cp -R "Sources/Graviton/Resources/"* "${RESOURCES_DIR}/"
+fi
 
 # Create Info.plist
 cat > "${CONTENTS_DIR}/Info.plist" <<EOF
@@ -40,6 +52,10 @@ cat > "${CONTENTS_DIR}/Info.plist" <<EOF
     <string>${APP_NAME}</string>
     <key>CFBundleDisplayName</key>
     <string>${APP_NAME}</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -83,7 +99,8 @@ if [ "$1" = "--install" ] || [ "$2" = "--install" ]; then
     echo "🚀 Installing ${APP_NAME}.app into /Applications..."
     killall "${APP_NAME}" 2>/dev/null || true
     killall "AGYTokenTracker" 2>/dev/null || true
-    sleep 0.5
+    sleep 1
+    killall -9 "${APP_NAME}" 2>/dev/null || true
     rm -rf "/Applications/${APP_NAME}.app"
     rm -rf "/Applications/AGYTokenTracker.app"
     cp -R "${BUNDLE_DIR}" /Applications/
