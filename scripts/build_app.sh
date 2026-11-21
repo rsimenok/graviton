@@ -9,7 +9,7 @@ cd "${REPO_ROOT}"
 # Script to build standalone Graviton.app for macOS
 
 APP_NAME="Graviton"
-APP_VERSION="${APP_VERSION:-1.1.0}"
+APP_VERSION="${APP_VERSION:-1.1.1}"
 BUNDLE_ID="com.smnk.graviton"
 BUNDLE_DIR="build/${APP_NAME}.app"
 CONTENTS_DIR="${BUNDLE_DIR}/Contents"
@@ -72,7 +72,7 @@ cat > "${CONTENTS_DIR}/Info.plist" <<EOF
     <key>CFBundleShortVersionString</key>
     <string>${APP_VERSION}</string>
     <key>CFBundleVersion</key>
-    <string>3</string>
+    <string>4</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>LSUIElement</key>
