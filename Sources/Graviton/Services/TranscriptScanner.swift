@@ -18,10 +18,12 @@ public final class TranscriptScanner: @unchecked Sendable {
 
     private struct CacheEntry {
         let mtime: Date
+        let dbMtime: Date?
         let steps: [TokenStep]
         let summary: SessionSummary?
     }
     private var fileCache: [URL: CacheEntry] = [:]
+    private var cacheEpoch: UInt64 = 0
 
     public init() {}
 
@@ -50,11 +52,22 @@ public final class TranscriptScanner: @unchecked Sendable {
 
         let transcriptFiles = findTranscriptFiles(in: targetURL)
 
+        // Conversation databases live next to the brain directory (`<root>/brain` + `<root>/conversations`).
+        let conversationsDir = targetURL.deletingLastPathComponent()
+            .appendingPathComponent("conversations", isDirectory: true)
+
         for fileURL in transcriptFiles {
             let fileMtime = (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date()
 
+            // The sibling DB supplies per-step models, so its changes must invalidate the cache too.
+            let dbURL = conversationsDir.appendingPathComponent("\(extractSessionId(from: fileURL)).db")
+            let dbMtime: Date? = FileManager.default.fileExists(atPath: dbURL.path)
+                ? SQLiteConversationScanner.shared.effectiveModificationDate(for: dbURL)
+                : nil
+
             lock.lock()
-            if let cached = fileCache[fileURL], cached.mtime == fileMtime {
+            let fileStartEpoch = cacheEpoch
+            if let cached = fileCache[fileURL], cached.mtime == fileMtime, cached.dbMtime == dbMtime {
                 lock.unlock()
                 if !cached.steps.isEmpty {
                     allSteps.append(contentsOf: cached.steps)
@@ -66,7 +79,7 @@ public final class TranscriptScanner: @unchecked Sendable {
             }
             lock.unlock()
 
-            let sessionSteps = parseTranscriptFile(fileURL: fileURL, surface: surface)
+            let sessionSteps = parseTranscriptFile(fileURL: fileURL, surface: surface, conversationsDirectory: conversationsDir)
             var sessionSummary: SessionSummary? = nil
             if !sessionSteps.isEmpty {
                 allSteps.append(contentsOf: sessionSteps)
@@ -77,9 +90,7 @@ public final class TranscriptScanner: @unchecked Sendable {
                 let totalCache = sessionSteps.reduce(0) { $0 + $1.cacheReadTokens }
                 let totalOutput = sessionSteps.reduce(0) { $0 + $1.outputTokens }
                 let detectedModel = sessionSteps.compactMap(\.modelName).last ?? sessionSteps.compactMap(\.modelName).first
-
-                let rate = PricingService.shared.rateFor(modelName: detectedModel)
-                let cost = rate.calculateCost(input: totalInput, cacheRead: totalCache, output: totalOutput)
+                let cost = sessionSteps.reduce(0.0) { $0 + $1.cost }
 
                 let summary = SessionSummary(
                     id: sessionId,
@@ -97,7 +108,9 @@ public final class TranscriptScanner: @unchecked Sendable {
             }
 
             lock.lock()
-            fileCache[fileURL] = CacheEntry(mtime: fileMtime, steps: sessionSteps, summary: sessionSummary)
+            if cacheEpoch == fileStartEpoch {
+                fileCache[fileURL] = CacheEntry(mtime: fileMtime, dbMtime: dbMtime, steps: sessionSteps, summary: sessionSummary)
+            }
             lock.unlock()
         }
 
@@ -133,14 +146,31 @@ public final class TranscriptScanner: @unchecked Sendable {
         return results
     }
 
-    public func parseTranscriptFile(fileURL: URL, surface: AppSurface = .desktop) -> [TokenStep] {
+    public func parseTranscriptFile(
+        fileURL: URL,
+        surface: AppSurface = .desktop,
+        conversationsDirectory: URL? = nil
+    ) -> [TokenStep] {
         guard let data = try? Data(contentsOf: fileURL),
               let content = String(data: data, encoding: .utf8) else {
             return []
         }
 
         let sessionId = extractSessionId(from: fileURL)
-        var steps: [TokenStep] = []
+
+        struct RawStep {
+            let stepIndex: Int
+            let date: Date
+            let inputTokens: Int
+            let cacheReadTokens: Int
+            let outputTokens: Int
+            /// Model recorded on the step itself (newer transcripts).
+            let explicitModel: String?
+            /// Model from the latest `<USER_SETTINGS_CHANGE>` seen before this step.
+            let settingsModel: String?
+        }
+
+        var rawSteps: [RawStep] = []
         var seenStepIndices = Set<Int>()
         var currentSessionModel: String? = nil
 
@@ -182,28 +212,73 @@ public final class TranscriptScanner: @unchecked Sendable {
             let dateString = obj["created_at"] as? String
             let date = dateString.flatMap { self.parseDate($0) } ?? Date()
 
-            let rate = PricingService.shared.rateFor(modelName: currentSessionModel)
-            let stepCost = rate.calculateCost(input: inputTokens, cacheRead: cacheReadTokens, output: outputTokens)
-
-            let step = TokenStep(
+            rawSteps.append(RawStep(
                 stepIndex: stepIndex,
-                sessionId: sessionId,
                 date: date,
                 inputTokens: inputTokens,
                 cacheReadTokens: cacheReadTokens,
                 outputTokens: outputTokens,
-                cost: stepCost,
-                modelName: currentSessionModel,
-                surface: surface
+                explicitModel: Self.validModelName((obj["model"] as? String)),
+                settingsModel: currentSessionModel
+            ))
+        }
+
+        // Older transcripts do not record the model per step. The sibling SQLite database does, so
+        // recover it from there for every step that lacks an explicit model.
+        var databaseModels = [String?](repeating: nil, count: rawSteps.count)
+        if let conversationsDirectory,
+           rawSteps.contains(where: { $0.explicitModel == nil }) {
+            let dbURL = conversationsDirectory.appendingPathComponent("\(sessionId).db")
+            if FileManager.default.fileExists(atPath: dbURL.path) {
+                let rows = SQLiteConversationScanner.shared.readStepModels(dbURL: dbURL)
+                databaseModels = StepModelAligner.align(
+                    steps: rawSteps.map { ($0.inputTokens, $0.cacheReadTokens) },
+                    rows: rows
+                ).map { Self.validModelName($0) }
+            }
+        }
+
+        var steps: [TokenStep] = []
+        steps.reserveCapacity(rawSteps.count)
+        for (index, raw) in rawSteps.enumerated() {
+            // Priority: model on the step > per-step model from SQLite > session-level setting.
+            let stepModel = raw.explicitModel ?? databaseModels[index] ?? raw.settingsModel
+
+            let rate = PricingService.shared.rateFor(modelName: stepModel)
+            let stepCost = rate.calculateCost(
+                input: raw.inputTokens,
+                cacheRead: raw.cacheReadTokens,
+                output: raw.outputTokens
             )
-            steps.append(step)
+
+            steps.append(TokenStep(
+                stepIndex: raw.stepIndex,
+                sessionId: sessionId,
+                date: raw.date,
+                inputTokens: raw.inputTokens,
+                cacheReadTokens: raw.cacheReadTokens,
+                outputTokens: raw.outputTokens,
+                cost: stepCost,
+                modelName: stepModel,
+                surface: surface
+            ))
         }
 
         return steps
     }
 
+    /// Returns the trimmed name when it looks like a real model identifier, otherwise `nil`.
+    private static func validModelName(_ raw: String?) -> String? {
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty,
+              ModelFormatter.isValidModelName(ModelFormatter.stripEffortSuffix(from: trimmed)) else {
+            return nil
+        }
+        return trimmed
+    }
+
     public func clearCache() {
         lock.lock()
+        cacheEpoch &+= 1
         fileCache.removeAll()
         lock.unlock()
     }
@@ -244,30 +319,12 @@ public final class TranscriptScanner: @unchecked Sendable {
             candidate = String(candidate.dropLast())
         }
 
-        if let parenRange = candidate.range(of: "(") {
-            candidate = String(candidate[..<parenRange.lowerBound])
-        }
-
-        let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = ModelFormatter.stripEffortSuffix(from: candidate)
         guard isValidModelName(trimmed) else { return nil }
         return trimmed
     }
 
     public func isValidModelName(_ name: String) -> Bool {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count >= 3 && trimmed.count <= 50 else { return false }
-
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-. _"))
-        guard trimmed.unicodeScalars.allSatisfy({ allowed.contains($0) }) else {
-            return false
-        }
-
-        let forbidden = ["{", "}", "(", ")", ";", "\"", "'", "[", "]", "return", "nil", "else", "guard", "let", "var", "func", "import", "class", "struct", "enum"]
-        let lower = trimmed.lowercased()
-        for bad in forbidden {
-            if lower.contains(bad) { return false }
-        }
-
-        return true
+        ModelFormatter.isValidModelName(name)
     }
 }

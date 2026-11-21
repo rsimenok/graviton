@@ -8,6 +8,11 @@ public final class UnifiedScanner: Sendable {
 
     public init() {}
 
+    public func clearCaches() {
+        transcriptScanner.clearCache()
+        sqliteScanner.clearCache()
+    }
+
     public func scanAllSurfaces() -> (steps: [TokenStep], sessions: [SessionSummary]) {
         var allSteps: [TokenStep] = []
         var allSessions: [SessionSummary] = []

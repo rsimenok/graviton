@@ -323,7 +323,7 @@ public struct ActiveQuotaSummaryView: View {
                                     Circle()
                                         .fill(group.tintColor)
                                         .frame(width: 5, height: 5)
-                                    Text(group.name.components(separatedBy: " ").first ?? group.name)
+                                    Text(group.shortLabel)
                                         .font(.system(size: 10, weight: .bold))
                                         .foregroundColor(.primary)
                                 }

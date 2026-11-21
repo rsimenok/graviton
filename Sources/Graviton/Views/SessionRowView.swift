@@ -29,7 +29,7 @@ public struct SessionRowView: View {
                 }
 
                 if let model = session.modelName {
-                    Text(model)
+                    Text(ModelFormatter.displayName(for: model))
                         .font(.system(size: 9, weight: .medium))
                         .padding(.horizontal, 5)
                         .padding(.vertical, 1.5)

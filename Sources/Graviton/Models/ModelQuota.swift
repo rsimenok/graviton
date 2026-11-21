@@ -107,8 +107,14 @@ public struct QuotaGroup: Identifiable, Sendable, Codable {
     public func matches(modelName: String) -> Bool {
         let lower = modelName.lowercased()
         let groupLower = name.lowercased()
+        if groupLower.contains("argon") {
+            return lower.contains("argon") || lower.contains("g1-pro")
+        }
         if groupLower.contains("gemini") {
-            return lower.contains("gemini")
+            if lower.contains("argon") || lower.contains("g1-pro") {
+                return false
+            }
+            return lower.contains("gemini") || lower.contains("neon") || lower.contains("hydrogen") || lower.contains("orchestrator")
         }
         if groupLower.contains("claude") || groupLower.contains("gpt") {
             return lower.contains("claude") || lower.contains("sonnet") || lower.contains("opus") || lower.contains("haiku") || lower.contains("gpt") || lower.contains("openai")
@@ -127,9 +133,19 @@ public struct QuotaGroup: Identifiable, Sendable, Codable {
         }
     }
 
+    public var shortLabel: String {
+        let lower = name.lowercased()
+        if lower.contains("argon") {
+            return "Argon"
+        }
+        return name.components(separatedBy: " ").first ?? name
+    }
+
     public var tintColor: Color {
         let lower = name.lowercased()
-        if lower.contains("gemini") {
+        if lower.contains("argon") {
+            return .purple
+        } else if lower.contains("gemini") {
             return .blue
         } else if lower.contains("claude") {
             return .orange

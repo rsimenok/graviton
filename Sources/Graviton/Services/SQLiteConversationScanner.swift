@@ -11,6 +11,7 @@ public final class SQLiteConversationScanner: @unchecked Sendable {
         let session: SessionSummary?
     }
     private var dbCache: [URL: CacheEntry] = [:]
+    private var cacheEpoch: UInt64 = 0
 
     public init() {}
 
@@ -31,6 +32,7 @@ public final class SQLiteConversationScanner: @unchecked Sendable {
             let fileMtime = effectiveModificationDate(for: fileURL)
 
             lock.lock()
+            let fileStartEpoch = cacheEpoch
             if let cached = dbCache[fileURL], cached.mtime == fileMtime {
                 lock.unlock()
                 if !cached.steps.isEmpty, let session = cached.session {
@@ -45,7 +47,9 @@ public final class SQLiteConversationScanner: @unchecked Sendable {
             let (steps, session) = parseDatabase(fileURL: fileURL, sessionId: sessionId, fileMtime: fileMtime, surface: surface)
 
             lock.lock()
-            dbCache[fileURL] = CacheEntry(mtime: fileMtime, steps: steps, session: session)
+            if cacheEpoch == fileStartEpoch {
+                dbCache[fileURL] = CacheEntry(mtime: fileMtime, steps: steps, session: session)
+            }
             lock.unlock()
 
             if !steps.isEmpty, let session = session {
@@ -60,7 +64,14 @@ public final class SQLiteConversationScanner: @unchecked Sendable {
         return (allSteps, sessionSummaries)
     }
 
-    private func effectiveModificationDate(for dbURL: URL) -> Date {
+    public func clearCache() {
+        lock.lock()
+        cacheEpoch &+= 1
+        dbCache.removeAll()
+        lock.unlock()
+    }
+
+    func effectiveModificationDate(for dbURL: URL) -> Date {
         let fm = FileManager.default
         let dbMtime = (try? fm.attributesOfItem(atPath: dbURL.path)[.modificationDate] as? Date) ?? Date()
         let walPath = dbURL.path + "-wal"
@@ -71,44 +82,37 @@ public final class SQLiteConversationScanner: @unchecked Sendable {
         return dbMtime
     }
 
+    /// Reads the model and token counts of every LLM call stored in a conversation database, in order.
+    /// Used to recover the per-step model for transcripts that do not record it.
+    public func readStepModels(dbURL: URL) -> [GenStepModel] {
+        withReadOnlyDatabase(at: dbURL) { db in
+            readGenRows(db: db).map { _, parsed in
+                GenStepModel(
+                    inputTokens: parsed.inputTokens,
+                    cacheReadTokens: parsed.cacheReadTokens,
+                    modelName: parsed.modelName
+                )
+            }
+        } ?? []
+    }
+
     private func parseDatabase(fileURL: URL, sessionId: String, fileMtime: Date, surface: AppSurface) -> (steps: [TokenStep], session: SessionSummary?) {
-        var db: OpaquePointer?
-        if sqlite3_open_v2(fileURL.path, &db, SQLITE_OPEN_READONLY, nil) != SQLITE_OK {
-            sqlite3_close(db)
-            return ([], nil)
-        }
-        defer { sqlite3_close(db) }
+        withReadOnlyDatabase(at: fileURL) { db in
+            let sessionDate: Date
+            if let metaDate = readSessionDate(db: db) {
+                sessionDate = max(metaDate, fileMtime)
+            } else {
+                sessionDate = fileMtime
+            }
 
-        let sessionDate: Date
-        if let metaDate = readSessionDate(db: db) {
-            sessionDate = max(metaDate, fileMtime)
-        } else {
-            sessionDate = fileMtime
-        }
+            let rows = readGenRows(db: db)
+            guard !rows.isEmpty else { return ([], nil) }
 
-        let query = "SELECT idx, data FROM gen_metadata ORDER BY idx"
-        var stmt: OpaquePointer?
-        if sqlite3_prepare_v2(db, query, -1, &stmt, nil) != SQLITE_OK {
-            return ([], nil)
-        }
-        defer { sqlite3_finalize(stmt) }
+            var steps: [TokenStep] = []
+            steps.reserveCapacity(rows.count)
+            var detectedModel: String? = nil
 
-        var steps: [TokenStep] = []
-        var detectedModel: String? = nil
-        var seenResponseIds = Set<String>()
-
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            let idx = Int(sqlite3_column_int64(stmt, 0))
-            guard let blobPtr = sqlite3_column_blob(stmt, 1) else { continue }
-            let blobBytes = sqlite3_column_bytes(stmt, 1)
-            let data = Data(bytes: blobPtr, count: Int(blobBytes))
-
-            if let parsed = parseGenMetadataBlob(data: data) {
-                if let respId = parsed.responseId {
-                    if seenResponseIds.contains(respId) { continue }
-                    seenResponseIds.insert(respId)
-                }
-
+            for (idx, parsed) in rows {
                 if let m = parsed.modelName, detectedModel == nil {
                     detectedModel = m
                 }
@@ -116,7 +120,7 @@ public final class SQLiteConversationScanner: @unchecked Sendable {
                 let rate = PricingService.shared.rateFor(modelName: parsed.modelName)
                 let stepCost = rate.calculateCost(input: parsed.inputTokens, cacheRead: parsed.cacheReadTokens, output: parsed.outputTokens)
 
-                let step = TokenStep(
+                steps.append(TokenStep(
                     stepIndex: idx,
                     sessionId: sessionId,
                     date: sessionDate,
@@ -126,33 +130,113 @@ public final class SQLiteConversationScanner: @unchecked Sendable {
                     cost: stepCost,
                     modelName: parsed.modelName,
                     surface: surface
-                )
-                steps.append(step)
+                ))
             }
+
+            let totalInput = steps.reduce(0) { $0 + $1.inputTokens }
+            let totalCache = steps.reduce(0) { $0 + $1.cacheReadTokens }
+            let totalOutput = steps.reduce(0) { $0 + $1.outputTokens }
+            let cost = steps.reduce(0.0) { $0 + $1.cost }
+
+            let summary = SessionSummary(
+                id: sessionId,
+                lastUpdated: sessionDate,
+                stepCount: steps.count,
+                inputTokens: totalInput,
+                cacheReadTokens: totalCache,
+                outputTokens: totalOutput,
+                estimatedCost: cost,
+                modelName: detectedModel,
+                surface: surface
+            )
+
+            return (steps, summary)
+        } ?? ([], nil)
+    }
+
+    /// Opens a SQLite database safely for reading, including WAL-mode databases whose
+    /// `-wal` / `-shm` sidecar files are absent (`?immutable=1`) or missing `-shm`.
+    private func withReadOnlyDatabase<T>(at fileURL: URL, _ body: (OpaquePointer) -> T) -> T? {
+        let fm = FileManager.default
+        let hasWal = fm.fileExists(atPath: fileURL.path + "-wal")
+
+        if !hasWal {
+            let uri = fileURL.absoluteString + "?immutable=1"
+            var db: OpaquePointer?
+            if sqlite3_open_v2(uri, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK, let opened = db {
+                defer { sqlite3_close(opened) }
+                return body(opened)
+            }
+            if let db { sqlite3_close(db) }
         }
 
-        guard !steps.isEmpty else { return ([], nil) }
+        // Live WAL database: try direct read-only open if a valid query can prepare,
+        // otherwise snapshot to a temporary directory so SQLite can replay -wal without locking.
+        var directDb: OpaquePointer?
+        if sqlite3_open_v2(fileURL.path, &directDb, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let opened = directDb {
+            var probeStmt: OpaquePointer?
+            let canQuery = sqlite3_prepare_v2(opened, "SELECT 1 FROM sqlite_master LIMIT 1", -1, &probeStmt, nil) == SQLITE_OK
+            sqlite3_finalize(probeStmt)
+            if canQuery {
+                defer { sqlite3_close(opened) }
+                return body(opened)
+            }
+            sqlite3_close(opened)
+        } else if let directDb {
+            sqlite3_close(directDb)
+        }
 
-        let totalInput = steps.reduce(0) { $0 + $1.inputTokens }
-        let totalCache = steps.reduce(0) { $0 + $1.cacheReadTokens }
-        let totalOutput = steps.reduce(0) { $0 + $1.outputTokens }
+        let tempDir = fm.temporaryDirectory.appendingPathComponent("graviton_sqlite_\(UUID().uuidString)", isDirectory: true)
+        do {
+            try fm.createDirectory(at: tempDir, withIntermediateDirectories: true)
+            defer { try? fm.removeItem(at: tempDir) }
 
-        let rate = PricingService.shared.rateFor(modelName: detectedModel)
-        let cost = rate.calculateCost(input: totalInput, cacheRead: totalCache, output: totalOutput)
+            let tempDbURL = tempDir.appendingPathComponent(fileURL.lastPathComponent)
+            try fm.copyItem(at: fileURL, to: tempDbURL)
+            for suffix in ["-wal", "-shm"] {
+                let sidecar = URL(fileURLWithPath: fileURL.path + suffix)
+                if fm.fileExists(atPath: sidecar.path) {
+                    try? fm.copyItem(at: sidecar, to: URL(fileURLWithPath: tempDbURL.path + suffix))
+                }
+            }
 
-        let summary = SessionSummary(
-            id: sessionId,
-            lastUpdated: sessionDate,
-            stepCount: steps.count,
-            inputTokens: totalInput,
-            cacheReadTokens: totalCache,
-            outputTokens: totalOutput,
-            estimatedCost: cost,
-            modelName: detectedModel,
-            surface: surface
-        )
+            var tempDb: OpaquePointer?
+            if sqlite3_open_v2(tempDbURL.path, &tempDb, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let opened = tempDb {
+                defer { sqlite3_close(opened) }
+                return body(opened)
+            }
+            if let tempDb { sqlite3_close(tempDb) }
+        } catch {
+            return nil
+        }
 
-        return (steps, summary)
+        return nil
+    }
+
+    private func readGenRows(db: OpaquePointer) -> [(idx: Int, parsed: ParsedGenRow)] {
+        let query = "SELECT idx, data FROM gen_metadata ORDER BY idx"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, query, -1, &stmt, nil) == SQLITE_OK else {
+            return []
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        var rows: [(idx: Int, parsed: ParsedGenRow)] = []
+        var seenResponseIds = Set<String>()
+
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let idx = Int(sqlite3_column_int64(stmt, 0))
+            guard let blobPtr = sqlite3_column_blob(stmt, 1) else { continue }
+            let data = Data(bytes: blobPtr, count: Int(sqlite3_column_bytes(stmt, 1)))
+            guard let parsed = parseGenMetadataBlob(data: data) else { continue }
+
+            if let respId = parsed.responseId {
+                if seenResponseIds.contains(respId) { continue }
+                seenResponseIds.insert(respId)
+            }
+            rows.append((idx: idx, parsed: parsed))
+        }
+        return rows
     }
 
     private func readSessionDate(db: OpaquePointer?) -> Date? {

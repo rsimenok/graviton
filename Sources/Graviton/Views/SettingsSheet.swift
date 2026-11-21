@@ -227,21 +227,21 @@ public struct SettingsSheet: View {
 
                             Spacer()
 
-                            Button("Sync Rates") {
-                                Task {
-                                    await PricingService.shared.fetchRemotePricing()
-                                    await MainActor.run {
-                                        tracker.pricingSyncDate = PricingService.shared.lastSyncDate
-                                        tracker.refresh()
-                                    }
+                            if tracker.isSyncingPricing {
+                                ProgressView()
+                                    .scaleEffect(0.6)
+                                    .frame(width: 16, height: 16)
+                            } else {
+                                Button("Sync Rates") {
+                                    tracker.syncPricing(force: true)
                                 }
+                                .font(.system(size: 11))
                             }
-                            .font(.system(size: 11))
                         }
                         .padding(8)
                         .background(
                             RoundedRectangle(cornerRadius: 6)
-                                .fill(Color(nsColor: .controlBackgroundColor))
+                                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.5))
                         )
                     }
                 }

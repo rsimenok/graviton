@@ -88,6 +88,7 @@ public final class TrackerViewModel: ObservableObject {
     @Published public var pricingSyncDate: Date?
     @Published public var quotaSnapshot: QuotaSnapshot?
     @Published public var isFetchingQuota: Bool = false
+    @Published public private(set) var isSyncingPricing: Bool = false
     @Published public var isShowingSettings: Bool = false
 
     @Published public var historyData: MonthlyHistoryData = HistoryStore.shared.currentData
@@ -103,7 +104,7 @@ public final class TrackerViewModel: ObservableObject {
     @Published public private(set) var breakdownMap: [AppSurface: (tokens: Int, cost: Double, sessionsCount: Int)] = [:]
 
     private let unifiedScanner = UnifiedScanner.shared
-    private let pricing = PricingService.shared
+    private let pricing: PricingSyncing
     private let watcher = FolderWatcher()
     private let quotaService = QuotaService.shared
     private let launchAtLoginManager: LaunchAtLoginManaging
@@ -112,11 +113,19 @@ public final class TrackerViewModel: ObservableObject {
     private var lastComputedDayStart: Date = Calendar.current.startOfDay(for: Date())
     private var lastQuotaFetchDate: Date?
     private let quotaRefreshCooldown: TimeInterval = 60.0
+    private var lastPricingAttemptDate: Date = .distantPast
+    private let pricingAutoSyncInterval: TimeInterval = PricingService.defaultAutoSyncInterval
+    private let pricingRetryCooldown: TimeInterval = 3600.0
     private var lastWindowOpenRefreshDate: Date = .distantPast
     private var pendingRefresh: Bool = false
 
-    public init(startBackgroundServices: Bool = true, launchAtLoginManager: LaunchAtLoginManaging = LaunchAtLoginManager.shared) {
+    public init(
+        startBackgroundServices: Bool = true,
+        launchAtLoginManager: LaunchAtLoginManaging = LaunchAtLoginManager.shared,
+        pricing: PricingSyncing = PricingService.shared
+    ) {
         self.launchAtLoginManager = launchAtLoginManager
+        self.pricing = pricing
         if let savedPeriod = UserDefaults.standard.string(forKey: "agy_selected_period") ?? UserDefaults.standard.string(forKey: "agv_selected_period"),
            let period = TimePeriod(rawValue: savedPeriod) {
             self.selectedPeriod = period
@@ -145,14 +154,7 @@ public final class TrackerViewModel: ObservableObject {
         refresh(forceQuota: true)
         startWatcher()
         setupLifecycleObservers()
-
-        Task {
-            await pricing.fetchRemotePricing()
-            await MainActor.run {
-                self.pricingSyncDate = self.pricing.lastSyncDate
-                self.recomputeMetrics()
-            }
-        }
+        syncPricing(force: true)
     }
 
     private func setupLifecycleObservers() {
@@ -174,7 +176,8 @@ public final class TrackerViewModel: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // Periodic 60-second check to ensure menu bar metrics roll over at midnight even while idle
+        // Periodic 60-second check to ensure menu bar metrics roll over at midnight
+        // and LiteLLM rates auto-sync every 24 hours even while idle.
         Timer.publish(every: 60.0, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] now in
@@ -183,6 +186,7 @@ public final class TrackerViewModel: ObservableObject {
                     self.recomputeMetrics(now: now)
                     self.refresh()
                 }
+                self.syncPricing(now: now)
             }
             .store(in: &cancellables)
     }
@@ -222,6 +226,7 @@ public final class TrackerViewModel: ObservableObject {
         }
 
         refreshQuota(force: forceQuota)
+        syncPricing(now: now)
 
         guard !isScanning else {
             pendingRefresh = true
@@ -242,6 +247,32 @@ public final class TrackerViewModel: ObservableObject {
                 self.isScanning = false
                 if self.pendingRefresh {
                     self.pendingRefresh = false
+                    self.refresh()
+                }
+            }
+        }
+    }
+
+    /// Fetches fresh LiteLLM pricing rates once every 24 hours (or immediately when `force` is true),
+    /// invalidates cached step costs, and refreshes computed metrics when new rates are applied.
+    public func syncPricing(force: Bool = false, now: Date = Date()) {
+        guard !isSyncingPricing else { return }
+        if !force {
+            guard pricing.shouldAutoSync(now: now, maxAge: pricingAutoSyncInterval) else { return }
+            guard now.timeIntervalSince(lastPricingAttemptDate) >= pricingRetryCooldown else { return }
+        }
+
+        isSyncingPricing = true
+        lastPricingAttemptDate = now
+
+        Task { [weak self] in
+            guard let self = self else { return }
+            let didUpdate = await self.pricing.fetchRemotePricing()
+            await MainActor.run {
+                self.isSyncingPricing = false
+                self.pricingSyncDate = self.pricing.lastSyncDate
+                if didUpdate {
+                    self.unifiedScanner.clearCaches()
                     self.refresh()
                 }
             }

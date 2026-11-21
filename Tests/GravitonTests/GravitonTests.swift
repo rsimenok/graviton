@@ -582,6 +582,511 @@ struct GravitonTests {
         #expect(TrackerViewModel.formatMenuBarCurrency(120.5) == "$120.50")
     }
 
+    @Test("PricingService resolves Gemini 4, Neon/Argon orchestrators, Claude 5.5, and GPT-OSS")
+    func testGemini4AndOrchestratorPricing() {
+        let pricing = PricingService(loadCache: false)
+
+        let neon = pricing.rateFor(modelName: "gemini-4-neon-xhigh")
+        #expect(neon.inputPerMillion == 3.00)
+        #expect(abs(neon.cacheReadPerMillion - 0.15) < 0.0001)
+        #expect(neon.outputPerMillion == 15.00)
+
+        let orchNeon = pricing.rateFor(modelName: "Orchestrator (Neon)")
+        #expect(orchNeon.inputPerMillion == 3.00)
+        #expect(orchNeon.outputPerMillion == 15.00)
+
+        let orchNeonId = pricing.rateFor(modelName: "gemini-pro-orchestrator-neon")
+        #expect(orchNeonId.inputPerMillion == 3.00)
+        #expect(orchNeonId.outputPerMillion == 15.00)
+
+        let argon = pricing.rateFor(modelName: "Gemini 4 Argon (High)")
+        #expect(argon.inputPerMillion == 2.00)
+        #expect(abs(argon.cacheReadPerMillion - 0.10) < 0.0001)
+        #expect(argon.outputPerMillion == 10.00)
+
+        let orchArgon = pricing.rateFor(modelName: "Orchestrator (Argon)")
+        #expect(orchArgon.inputPerMillion == 2.00)
+        #expect(orchArgon.outputPerMillion == 10.00)
+
+        let orchArgonId = pricing.rateFor(modelName: "gemini-pro-orchestrator-g1-pro")
+        #expect(orchArgonId.inputPerMillion == 2.00)
+        #expect(orchArgonId.outputPerMillion == 10.00)
+
+        let hydrogen = pricing.rateFor(modelName: "gemini-4-hydrogen-high")
+        #expect(hydrogen.inputPerMillion == 1.50)
+        #expect(abs(hydrogen.cacheReadPerMillion - 0.075) < 0.0001)
+        #expect(hydrogen.outputPerMillion == 7.50)
+
+        let opus55 = pricing.rateFor(modelName: "Claude Opus 5.5 (High)")
+        #expect(opus55.inputPerMillion == 4.00)
+        #expect(abs(opus55.cacheReadPerMillion - 0.20) < 0.0001)
+        #expect(opus55.outputPerMillion == 20.00)
+
+        let sonnet55 = pricing.rateFor(modelName: "Claude Sonnet 5.5 (Medium)")
+        #expect(sonnet55.inputPerMillion == 2.00)
+        #expect(abs(sonnet55.cacheReadPerMillion - 0.10) < 0.0001)
+        #expect(sonnet55.outputPerMillion == 10.00)
+
+        let gptOss = pricing.rateFor(modelName: "GPT-OSS 120B (Medium)")
+        #expect(gptOss.inputPerMillion == 0.15)
+        #expect(gptOss.outputPerMillion == 0.60)
+
+        let flash35 = pricing.rateFor(modelName: "gemini-3.5-flash")
+        #expect(flash35.inputPerMillion == 1.50)
+        #expect(abs(flash35.cacheReadPerMillion - 0.15) < 0.0001)
+        #expect(flash35.outputPerMillion == 9.00)
+    }
+
+    @Test("ModelFormatter and TranscriptScanner preserve orchestrator names and normalize effort suffixes")
+    func testOrchestratorAndGemini4Formatting() {
+        let scanner = TranscriptScanner.shared
+
+        let orchNeonMsg = "<USER_SETTINGS_CHANGE>\nThe user changed setting `Model Selection` from None to Orchestrator (Neon). No need to comment.\n</USER_SETTINGS_CHANGE>"
+        #expect(scanner.extractModelFromContent(orchNeonMsg) == "Orchestrator (Neon)")
+
+        let orchArgonMsg = "<USER_SETTINGS_CHANGE>\nThe user changed setting `Model Selection` from Orchestrator (Neon) to Orchestrator (Argon).\n</USER_SETTINGS_CHANGE>"
+        #expect(scanner.extractModelFromContent(orchArgonMsg) == "Orchestrator (Argon)")
+
+        #expect(ModelFormatter.displayName(for: "gemini-pro-orchestrator-neon") == "Orchestrator (Neon)")
+        #expect(ModelFormatter.canonicalId(for: "Orchestrator (Neon)") == "orchestrator-neon")
+        // The Argon orchestrator is grouped with Gemini 4 Argon (same quota pool and price).
+        #expect(ModelFormatter.displayName(for: "gemini-pro-orchestrator-g1-pro") == "Gemini 4 Argon")
+        #expect(ModelFormatter.displayName(for: "Orchestrator (Argon)") == "Gemini 4 Argon")
+        #expect(ModelFormatter.canonicalId(for: "Orchestrator (Argon)") == "gemini-4-argon")
+
+        #expect(ModelFormatter.displayName(for: "gemini-4-neon-xhigh") == "Gemini 4 Neon")
+        #expect(ModelFormatter.displayName(for: "gemini-4-argon-high") == "Gemini 4 Argon")
+        #expect(ModelFormatter.displayName(for: "gemini-4-hydrogen-xhigh") == "Gemini 4 Hydrogen")
+        #expect(ModelFormatter.displayName(for: "claude-opus-5-5-high") == "Claude Opus 5.5")
+        #expect(ModelFormatter.displayName(for: "claude-sonnet-5-5-medium") == "Claude Sonnet 5.5")
+        #expect(ModelFormatter.displayName(for: "gpt-oss-120b-medium") == "GPT-OSS 120B")
+        #expect(ModelFormatter.provider(for: "Orchestrator (Neon)") == "Google")
+        #expect(ModelFormatter.provider(for: "GPT-OSS 120B") == "OpenAI")
+    }
+
+    @Test("TranscriptScanner reads per-step model from PLANNER_RESPONSE and sums multi-model session cost")
+    func testPerStepPlannerModelAndSessionCostSum() throws {
+        let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent("test_orch_brain_\(UUID().uuidString)", isDirectory: true)
+        let logsDir = tempRoot.appendingPathComponent("session-orch/.system_generated/logs", isDirectory: true)
+        try FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        // No <USER_SETTINGS_CHANGE> in file (same as subagents or direct sessions),
+        // but each PLANNER_RESPONSE carries its own "model" field.
+        let sampleJSONL = """
+        {"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","model":"gemini-4-neon-xhigh","status":"DONE","created_at":"2026-11-20T23:00:00Z","input_tokens":1000000,"cache_read_tokens":0,"output_tokens":0}
+        {"step_index":2,"source":"MODEL","type":"PLANNER_RESPONSE","model":"gemini-3.8-flash-high","status":"DONE","created_at":"2026-11-20T23:05:00Z","input_tokens":1000000,"cache_read_tokens":0,"output_tokens":0}
+        """
+        let transcriptURL = logsDir.appendingPathComponent("transcript.jsonl")
+        try sampleJSONL.write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let (steps, sessions) = TranscriptScanner.shared.scanAll(brainURL: tempRoot, surface: .desktop)
+        #expect(steps.count == 2)
+        #expect(sessions.count == 1)
+
+        let neonStep = try #require(steps.first(where: { $0.stepIndex == 1 }))
+        let flashStep = try #require(steps.first(where: { $0.stepIndex == 2 }))
+        #expect(ModelFormatter.displayName(for: neonStep.modelName) == "Gemini 4 Neon")
+        #expect(ModelFormatter.displayName(for: flashStep.modelName) == "Gemini 3.8 Flash")
+        #expect(abs(neonStep.cost - 3.00) < 0.001)
+        #expect(abs(flashStep.cost - 0.75) < 0.001)
+
+        // SessionSummary.estimatedCost must sum step costs ($3.00 + $0.75 = $3.75),
+        // NOT multiply all 2M tokens by the last model ($1.50).
+        #expect(abs(sessions[0].estimatedCost - 3.75) < 0.001)
+    }
+
+    @Test("QuotaGroup matches Neon and Argon orchestrators without misrouting Argon to Gemini Models")
+    func testQuotaGroupOrchestratorMatching() {
+        let geminiGroup = QuotaGroup(name: "Gemini Models", buckets: [])
+        let argonGroup = QuotaGroup(name: "Gemini 4 Argon", buckets: [])
+        let claudeGroup = QuotaGroup(name: "Claude and GPT models", buckets: [])
+        let snapshot = QuotaSnapshot(groups: [geminiGroup, claudeGroup, argonGroup])
+
+        #expect(snapshot.group(for: "Gemini 4 Neon")?.name == "Gemini Models")
+        #expect(snapshot.group(for: "Orchestrator (Neon)")?.name == "Gemini Models")
+        #expect(snapshot.group(for: "Gemini 4 Hydrogen")?.name == "Gemini Models")
+        #expect(snapshot.group(for: "Gemini 4 Argon")?.name == "Gemini 4 Argon")
+        #expect(snapshot.group(for: "Orchestrator (Argon)")?.name == "Gemini 4 Argon")
+        #expect(snapshot.group(for: "GPT-OSS 120B")?.name == "Claude and GPT models")
+        #expect(geminiGroup.shortLabel == "Gemini")
+        #expect(argonGroup.shortLabel == "Argon")
+        #expect(claudeGroup.shortLabel == "Claude")
+    }
+
+    @Test("PricingService prioritizes synced LiteLLM prefixed entries over built-in defaults")
+    func testLiteLLMPrefixedRateOverridesBuiltInDefaults() throws {
+        let pricing = PricingService(loadCache: false)
+
+        // Verify offline defaults work without any cache file
+        let offlineNeon = pricing.rateFor(modelName: "Orchestrator (Neon)")
+        #expect(offlineNeon.inputPerMillion == 3.00)
+        #expect(offlineNeon.outputPerMillion == 15.00)
+
+        // Simulate synced LiteLLM JSON with provider-prefixed keys and custom updated prices
+        let json = """
+        {
+          "vertex_ai/gemini-4-neon": {
+            "input_cost_per_token": 0.000009,
+            "cache_read_input_token_cost": 0.00000045,
+            "output_cost_per_token": 0.000045
+          },
+          "gemini/gemini-4-argon": {
+            "input_cost_per_token": 0.000006,
+            "cache_read_input_token_cost": 0.0000003,
+            "output_cost_per_token": 0.00003
+          },
+          "openai.gpt-oss-120b-1:0": {
+            "input_cost_per_token": 0.0000005,
+            "output_cost_per_token": 0.000002
+          }
+        }
+        """
+        pricing.applyPricingJSON(data: Data(json.utf8))
+
+        let syncedNeon = pricing.rateFor(modelName: "Orchestrator (Neon)")
+        #expect(abs(syncedNeon.inputPerMillion - 9.00) < 0.0001)
+        #expect(abs(syncedNeon.cacheReadPerMillion - 0.45) < 0.0001)
+        #expect(abs(syncedNeon.outputPerMillion - 45.00) < 0.0001)
+
+        let syncedArgon = pricing.rateFor(modelName: "gemini-pro-orchestrator-g1-pro")
+        #expect(abs(syncedArgon.inputPerMillion - 6.00) < 0.0001)
+        #expect(abs(syncedArgon.cacheReadPerMillion - 0.30) < 0.0001)
+        #expect(abs(syncedArgon.outputPerMillion - 30.00) < 0.0001)
+
+        let syncedGptOss = pricing.rateFor(modelName: "gpt-oss-120b-medium")
+        #expect(abs(syncedGptOss.inputPerMillion - 0.50) < 0.0001)
+        #expect(abs(syncedGptOss.outputPerMillion - 2.00) < 0.0001)
+
+        // Re-syncing without an earlier key removes stale remote entries
+        let updatedJson = """
+        {
+          "vertex_ai/gemini-4-neon": {
+            "input_cost_per_token": 0.000004,
+            "cache_read_input_token_cost": 0.0000002,
+            "output_cost_per_token": 0.00002
+          }
+        }
+        """
+        pricing.applyPricingJSON(data: Data(updatedJson.utf8))
+        let revertedArgon = pricing.rateFor(modelName: "gemini-pro-orchestrator-g1-pro")
+        #expect(abs(revertedArgon.inputPerMillion - 2.00) < 0.0001)
+    }
+
+    @Test("ModelFormatter and PricingService handle -tiered suffix and gemini-flash-worker-agy")
+    func testTieredSuffixAndFlashWorkerAgy() {
+        #expect(ModelFormatter.displayName(for: "gemini-4-hydrogen-tiered") == "Gemini 4 Hydrogen")
+        #expect(ModelFormatter.canonicalId(for: "gemini-4-hydrogen-tiered") == "gemini-4-hydrogen")
+        #expect(ModelFormatter.displayName(for: "gemini-4-neon-tiered") == "Gemini 4 Neon")
+        #expect(ModelFormatter.displayName(for: "gemini-4-argon-tiered") == "Gemini 4 Argon")
+        // The orchestrator execution worker belongs to the Gemini 4 Hydrogen family.
+        #expect(ModelFormatter.displayName(for: "gemini-flash-worker-agy") == "Gemini 4 Hydrogen")
+        #expect(ModelFormatter.canonicalId(for: "gemini-flash-worker-agy") == "gemini-4-hydrogen")
+
+        let pricing = PricingService(loadCache: false)
+        let workerRate = pricing.rateFor(modelName: "gemini-flash-worker-agy")
+        #expect(workerRate.inputPerMillion == 1.50)
+        #expect(abs(workerRate.cacheReadPerMillion - 0.075) < 0.0001)
+        #expect(workerRate.outputPerMillion == 7.50)
+
+        let orchArgonRate = pricing.rateFor(modelName: "Orchestrator (Argon)")
+        #expect(orchArgonRate.inputPerMillion == 2.00)
+        #expect(orchArgonRate.outputPerMillion == 10.00)
+
+        let tieredRate = pricing.rateFor(modelName: "gemini-4-hydrogen-tiered")
+        #expect(tieredRate.inputPerMillion == 1.50)
+        #expect(abs(tieredRate.cacheReadPerMillion - 0.075) < 0.0001)
+        #expect(tieredRate.outputPerMillion == 7.50)
+    }
+
+    @Test("ModelFormatter and PricingService normalize experimental SQLite model variants")
+    func testExperimentalModelVariantNormalization() {
+        #expect(ModelFormatter.displayName(for: "gemini-3.8-flash-n") == "Gemini 3.8 Flash")
+        #expect(ModelFormatter.canonicalId(for: "gemini-3.8-flash-n") == "gemini-3.8-flash")
+        #expect(ModelFormatter.displayName(for: "gemini-4-argon-trial") == "Gemini 4 Argon")
+        #expect(ModelFormatter.displayName(for: "gemini-4-argon-e") == "Gemini 4 Argon")
+        #expect(ModelFormatter.displayName(for: "gemini-3.7-flash-exp-a") == "Gemini 3.7 Flash")
+        #expect(ModelFormatter.displayName(for: "gemini-3.7-flash-exp-b") == "Gemini 3.7 Flash")
+        #expect(ModelFormatter.displayName(for: "gemini-3.6-flash") == "Gemini 3.6 Flash")
+        #expect(ModelFormatter.displayName(for: "gemini-3-flash-a") == "Gemini 3 Flash")
+        #expect(ModelFormatter.displayName(for: "gemini-3.8-flash-tiered") == "Gemini 3.8 Flash")
+
+        let pricing = PricingService(loadCache: false)
+        let flash37 = pricing.rateFor(modelName: "gemini-3.7-flash-exp-a")
+        #expect(flash37.inputPerMillion == 0.75)
+        #expect(abs(flash37.cacheReadPerMillion - 0.075) < 0.0001)
+        #expect(flash37.outputPerMillion == 3.75)
+        let flash36 = pricing.rateFor(modelName: "gemini-3.6-flash-high")
+        #expect(flash36.inputPerMillion == 0.75)
+        #expect(flash36.outputPerMillion == 3.75)
+        let argonTrial = pricing.rateFor(modelName: "gemini-4-argon-trial")
+        #expect(argonTrial.inputPerMillion == 2.00)
+        #expect(argonTrial.outputPerMillion == 10.00)
+    }
+
+    @Test("StepModelAligner assigns SQLite per-step models by order with tolerance and window")
+    func testStepModelAlignment() {
+        func row(_ input: Int, _ cache: Int, _ model: String?) -> GenStepModel {
+            GenStepModel(inputTokens: input, cacheReadTokens: cache, modelName: model)
+        }
+        let rows = [
+            row(1000, 0, "gemini-pro-orchestrator-neon"),
+            row(2000, 1000, "gemini-flash-worker-agy"),
+            row(3000, 3000, "gemini-flash-worker-agy"),
+            row(4000, 6000, "gemini-4-hydrogen")
+        ]
+
+        // Exact 1:1 alignment
+        let exact = StepModelAligner.align(
+            steps: [(1000, 0), (2000, 1000), (3000, 3000), (4000, 6000)],
+            rows: rows
+        )
+        #expect(exact == ["gemini-pro-orchestrator-neon", "gemini-flash-worker-agy", "gemini-flash-worker-agy", "gemini-4-hydrogen"])
+
+        // Tiny token drift between transcript and DB is tolerated (rounded counters)
+        let drift = StepModelAligner.align(
+            steps: [(1001, 0), (1998, 1001), (3000, 2999)],
+            rows: rows
+        )
+        #expect(drift == ["gemini-pro-orchestrator-neon", "gemini-flash-worker-agy", "gemini-flash-worker-agy"])
+
+        // A DB row without a transcript step (skipped within the window) does not break the rest
+        let skipped = StepModelAligner.align(
+            steps: [(1000, 0), (3000, 3000), (4000, 6000)],
+            rows: rows
+        )
+        #expect(skipped == ["gemini-pro-orchestrator-neon", "gemini-flash-worker-agy", "gemini-4-hydrogen"])
+
+        // A transcript step with no match stays nil, and later steps still align
+        let unmatched = StepModelAligner.align(
+            steps: [(1000, 0), (777_777, 5), (3000, 3000)],
+            rows: rows
+        )
+        #expect(unmatched == ["gemini-pro-orchestrator-neon", nil, "gemini-flash-worker-agy"])
+
+        // Completely unrelated rows yield no models at all
+        let none = StepModelAligner.align(steps: [(5, 5), (6, 6)], rows: rows)
+        #expect(none == [nil, nil])
+    }
+
+    @Test("TranscriptScanner fills model-less steps from the sibling SQLite conversation DB")
+    func testTranscriptModelEnrichmentFromSQLite() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("test_enrich_\(UUID().uuidString)", isDirectory: true)
+        let brain = root.appendingPathComponent("brain", isDirectory: true)
+        let conversations = root.appendingPathComponent("conversations", isDirectory: true)
+        let sessionId = "session-enrich"
+        let logsDir = brain.appendingPathComponent("\(sessionId)/.system_generated/logs", isDirectory: true)
+        try fm.createDirectory(at: logsDir, withIntermediateDirectories: true)
+        try fm.createDirectory(at: conversations, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        // Old-format transcript: no "model" on PLANNER_RESPONSE, no USER_SETTINGS_CHANGE.
+        // Step 3 carries an explicit model that must win over the DB.
+        let jsonl = """
+        {"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-10T10:00:00Z","input_tokens":1000000,"cache_read_tokens":0,"output_tokens":0}
+        {"step_index":2,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-10T10:01:00Z","input_tokens":1000000,"cache_read_tokens":0,"output_tokens":0}
+        {"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","model":"gemini-3.8-flash-high","status":"DONE","created_at":"2026-11-10T10:02:00Z","input_tokens":1000000,"cache_read_tokens":0,"output_tokens":0}
+        """
+        try jsonl.write(to: logsDir.appendingPathComponent("transcript.jsonl"), atomically: true, encoding: .utf8)
+
+        func genRow(model: String, input: UInt64, responseId: String) -> Data {
+            var usage = Data()
+            usage.append(encodeVarintField(fieldNumber: 2, value: input))
+            usage.append(encodeVarintField(fieldNumber: 9, value: 1))
+            usage.append(encodeLengthDelimited(fieldNumber: 11, data: responseId.data(using: .utf8)!))
+            var chat = Data()
+            chat.append(encodeLengthDelimited(fieldNumber: 19, data: model.data(using: .utf8)!))
+            chat.append(encodeLengthDelimited(fieldNumber: 4, data: usage))
+            return encodeLengthDelimited(fieldNumber: 1, data: chat)
+        }
+
+        let dbURL = conversations.appendingPathComponent("\(sessionId).db")
+        var db: OpaquePointer?
+        #expect(sqlite3_open(dbURL.path, &db) == SQLITE_OK)
+        #expect(sqlite3_exec(db, "CREATE TABLE gen_metadata (idx INTEGER, data BLOB);", nil, nil, nil) == SQLITE_OK)
+        let blobs = [
+            genRow(model: "gemini-pro-orchestrator-neon", input: 1_000_000, responseId: "r1"),
+            genRow(model: "gemini-flash-worker-agy", input: 1_000_000, responseId: "r2"),
+            genRow(model: "gemini-4-argon", input: 1_000_000, responseId: "r3")
+        ]
+        for (i, blob) in blobs.enumerated() {
+            var stmt: OpaquePointer?
+            #expect(sqlite3_prepare_v2(db, "INSERT INTO gen_metadata (idx, data) VALUES (\(i + 1), ?);", -1, &stmt, nil) == SQLITE_OK)
+            _ = blob.withUnsafeBytes { raw in
+                sqlite3_bind_blob(stmt, 1, raw.baseAddress, Int32(blob.count), nil)
+            }
+            #expect(sqlite3_step(stmt) == SQLITE_DONE)
+            sqlite3_finalize(stmt)
+        }
+        sqlite3_close(db)
+
+        let (steps, sessions) = TranscriptScanner.shared.scanAll(brainURL: brain, surface: .desktop)
+        #expect(steps.count == 3)
+        let byIndex = Dictionary(uniqueKeysWithValues: steps.map { ($0.stepIndex, $0) })
+
+        let neon = try #require(byIndex[1])
+        #expect(ModelFormatter.displayName(for: neon.modelName) == "Orchestrator (Neon)")
+        #expect(abs(neon.cost - 3.00) < 0.001)
+
+        // Worker is grouped with and priced like Gemini 4 Hydrogen ($1.50 / 1M input)
+        let worker = try #require(byIndex[2])
+        #expect(ModelFormatter.displayName(for: worker.modelName) == "Gemini 4 Hydrogen")
+        #expect(abs(worker.cost - 1.50) < 0.001)
+
+        // Explicit transcript model wins over the DB row (which says gemini-4-argon)
+        let explicit = try #require(byIndex[3])
+        #expect(ModelFormatter.displayName(for: explicit.modelName) == "Gemini 3.8 Flash")
+        #expect(abs(explicit.cost - 0.75) < 0.001)
+
+        #expect(sessions.count == 1)
+        #expect(abs(sessions[0].estimatedCost - 5.25) < 0.001)
+    }
+
+    @Test("SQLiteConversationScanner reads WAL-mode databases that have no -wal/-shm sidecar files")
+    func testReadsWalModeDatabaseWithoutSidecars() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("test_wal_\(UUID().uuidString)", isDirectory: true)
+        let conversations = root.appendingPathComponent("conversations", isDirectory: true)
+        try fm.createDirectory(at: conversations, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        var usage = Data()
+        usage.append(encodeVarintField(fieldNumber: 2, value: 1200))
+        usage.append(encodeVarintField(fieldNumber: 5, value: 800))
+        usage.append(encodeVarintField(fieldNumber: 9, value: 400))
+        usage.append(encodeLengthDelimited(fieldNumber: 11, data: "wal-resp".data(using: .utf8)!))
+        var chat = Data()
+        chat.append(encodeLengthDelimited(fieldNumber: 19, data: "gemini-4-hydrogen".data(using: .utf8)!))
+        chat.append(encodeLengthDelimited(fieldNumber: 4, data: usage))
+        let blob = encodeLengthDelimited(fieldNumber: 1, data: chat)
+
+        let dbURL = conversations.appendingPathComponent("wal-session.db")
+        var db: OpaquePointer?
+        #expect(sqlite3_open(dbURL.path, &db) == SQLITE_OK)
+        #expect(sqlite3_exec(db, "PRAGMA journal_mode=WAL;", nil, nil, nil) == SQLITE_OK)
+        #expect(sqlite3_exec(db, "CREATE TABLE gen_metadata (idx INTEGER, data BLOB);", nil, nil, nil) == SQLITE_OK)
+        var stmt: OpaquePointer?
+        #expect(sqlite3_prepare_v2(db, "INSERT INTO gen_metadata (idx, data) VALUES (1, ?);", -1, &stmt, nil) == SQLITE_OK)
+        _ = blob.withUnsafeBytes { raw in sqlite3_bind_blob(stmt, 1, raw.baseAddress, Int32(blob.count), nil) }
+        #expect(sqlite3_step(stmt) == SQLITE_DONE)
+        sqlite3_finalize(stmt)
+        // Fold everything into the main file, then drop the sidecars to mirror a cleanly closed
+        // WAL-mode database (the state of finished Antigravity conversations on disk).
+        #expect(sqlite3_exec(db, "PRAGMA wal_checkpoint(TRUNCATE);", nil, nil, nil) == SQLITE_OK)
+        sqlite3_close(db)
+        try? fm.removeItem(atPath: dbURL.path + "-wal")
+        try? fm.removeItem(atPath: dbURL.path + "-shm")
+        #expect(fm.fileExists(atPath: dbURL.path))
+
+        let rows = SQLiteConversationScanner.shared.readStepModels(dbURL: dbURL)
+        #expect(rows == [GenStepModel(inputTokens: 1200, cacheReadTokens: 800, modelName: "gemini-4-hydrogen")])
+
+        let (steps, sessions) = SQLiteConversationScanner.shared.scanDirectory(directoryURL: root, surface: .cli)
+        #expect(steps.count == 1)
+        #expect(sessions.count == 1)
+    }
+
+    @Test("PricingService reports when 24-hour auto-sync is due")
+    func testPricingServiceAutoSyncDue() throws {
+        let tempCache = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test_pricing_cache_\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: tempCache) }
+
+        let freshService = PricingService(cacheURL: tempCache, loadCache: false)
+        let now = Date()
+        #expect(freshService.lastSyncDate == nil)
+        #expect(freshService.shouldAutoSync(now: now))
+
+        // Write a cache file timestamped 12 hours ago -> not due yet
+        try "{}".write(to: tempCache, atomically: true, encoding: .utf8)
+        let twelveHoursAgo = now.addingTimeInterval(-12 * 3600)
+        try FileManager.default.setAttributes([.modificationDate: twelveHoursAgo], ofItemAtPath: tempCache.path)
+        let recentService = PricingService(cacheURL: tempCache, loadCache: true)
+        #expect(!recentService.shouldAutoSync(now: now))
+
+        // Cache file timestamped 25 hours ago -> due for auto-sync
+        let twentyFiveHoursAgo = now.addingTimeInterval(-25 * 3600)
+        try FileManager.default.setAttributes([.modificationDate: twentyFiveHoursAgo], ofItemAtPath: tempCache.path)
+        let staleService = PricingService(cacheURL: tempCache, loadCache: true)
+        #expect(staleService.shouldAutoSync(now: now))
+    }
+
+    @Test("TrackerViewModel auto-syncs stale pricing once per day and respects retry cooldown")
+    @MainActor
+    func testTrackerViewModelAutoSyncPricing() async throws {
+        final class MockPricingSyncer: PricingSyncing, @unchecked Sendable {
+            private let lock = NSLock()
+            var lastSyncDate: Date?
+            var fetchCalls = 0
+            var nextFetchResult = true
+
+            init(lastSyncDate: Date?) {
+                self.lastSyncDate = lastSyncDate
+            }
+
+            func shouldAutoSync(now: Date, maxAge: TimeInterval) -> Bool {
+                lock.lock()
+                defer { lock.unlock() }
+                guard let lastSyncDate else { return true }
+                return now.timeIntervalSince(lastSyncDate) >= maxAge
+            }
+
+            func rateFor(modelName: String?) -> ModelRate {
+                PricingService.shared.rateFor(modelName: modelName)
+            }
+
+            func fetchRemotePricing() async -> Bool {
+                lock.withLock {
+                    fetchCalls += 1
+                    let result = nextFetchResult
+                    if result {
+                        lastSyncDate = Date()
+                    }
+                    return result
+                }
+            }
+        }
+
+        let now = Date()
+        // 1. Freshly synced (2h ago) -> auto-sync does nothing; force: true syncs anyway
+        let freshMock = MockPricingSyncer(lastSyncDate: now.addingTimeInterval(-2 * 3600))
+        let freshVM = TrackerViewModel(startBackgroundServices: false, pricing: freshMock)
+        freshVM.syncPricing(now: now)
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(freshMock.fetchCalls == 0)
+
+        freshVM.syncPricing(force: true, now: now)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(freshMock.fetchCalls == 1)
+
+        // 2. Stale (25h ago), first attempt fails -> respects 1h retry cooldown, retries after cooldown
+        let staleMock = MockPricingSyncer(lastSyncDate: now.addingTimeInterval(-25 * 3600))
+        staleMock.nextFetchResult = false
+        let staleVM = TrackerViewModel(startBackgroundServices: false, pricing: staleMock)
+
+        staleVM.syncPricing(now: now)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(staleMock.fetchCalls == 1)
+
+        // 10 minutes later: blocked by retry cooldown
+        staleVM.syncPricing(now: now.addingTimeInterval(600))
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(staleMock.fetchCalls == 1)
+
+        // 2 hours later: cooldown expired, succeeds and updates pricingSyncDate
+        staleMock.nextFetchResult = true
+        staleVM.syncPricing(now: now.addingTimeInterval(2 * 3600))
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(staleMock.fetchCalls == 2)
+        #expect(staleVM.pricingSyncDate != nil)
+    }
+
+    @Test("UnifiedScanner clearCaches allows recalculated costs after pricing update")
+    func testUnifiedScannerClearCaches() {
+        UnifiedScanner.shared.clearCaches()
+    }
+
     // MARK: - Protobuf Encoding Helpers for Tests
 
     private func encodeVarint(_ value: UInt64) -> Data {
