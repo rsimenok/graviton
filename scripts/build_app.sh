@@ -9,7 +9,7 @@ cd "${REPO_ROOT}"
 # Script to build standalone Graviton.app for macOS
 
 APP_NAME="Graviton"
-APP_VERSION="${APP_VERSION:-1.1.1}"
+APP_VERSION="${APP_VERSION:-1.1.2}"
 BUNDLE_ID="com.smnk.graviton"
 BUNDLE_DIR="build/${APP_NAME}.app"
 CONTENTS_DIR="${BUNDLE_DIR}/Contents"
