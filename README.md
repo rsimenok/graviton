@@ -65,6 +65,7 @@ Built entirely with **SwiftUI** and **AppKit** with a modern Liquid Glass aesthe
 ### ⏱️ Live Quotas & Limits Monitoring
 - **Real-time Quota Fetching**: Queries `agy --print /usage --output-format json` asynchronously with safe fallback parsing.
 - **Visual Limit Gauges**: Tracks remaining quota fractions across rolling windows (e.g., Weekly limits, 5-hour rolling windows).
+- **Weekly Usage Today**: Shows today's observed weekly consumption inline (e.g., `73% used / 10% today`), starting with the day's first live reading and preserving the counter across restarts.
 - **Reset Timestamps & Countdowns**: Displays exact reset dates and formatted countdowns.
 - **Resilient Local Caching**: Persists last-known quota state in `UserDefaults` so the UI remains instantaneous on launch.
 

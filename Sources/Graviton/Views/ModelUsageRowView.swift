@@ -290,7 +290,7 @@ public struct ModelLimitsSectionView: View {
             if let snapshot = tracker.quotaSnapshot, !snapshot.groups.isEmpty {
                 VStack(spacing: 8) {
                     ForEach(snapshot.groups) { group in
-                        QuotaGroupCardView(group: group)
+                        QuotaGroupCardView(group: group, weeklyUsageToday: tracker.weeklyUsageToday[group.id])
                     }
                 }
                 .padding(.horizontal, 14)
@@ -314,9 +314,11 @@ public struct ModelLimitsSectionView: View {
 
 public struct QuotaGroupCardView: View {
     let group: QuotaGroup
+    let weeklyUsageToday: WeeklyQuotaUsage?
 
-    public init(group: QuotaGroup) {
+    public init(group: QuotaGroup, weeklyUsageToday: WeeklyQuotaUsage? = nil) {
         self.group = group
+        self.weeklyUsageToday = weeklyUsageToday
     }
 
     public var body: some View {
@@ -342,7 +344,7 @@ public struct QuotaGroupCardView: View {
 
             VStack(spacing: 6) {
                 ForEach(group.buckets) { bucket in
-                    QuotaBucketRowView(bucket: bucket)
+                    QuotaBucketRowView(bucket: bucket, usageToday: bucket.id == group.weeklyBucket?.id ? weeklyUsageToday : nil)
                 }
             }
         }
@@ -360,9 +362,11 @@ public struct QuotaGroupCardView: View {
 
 public struct QuotaBucketRowView: View {
     let bucket: QuotaBucket
+    let usageToday: WeeklyQuotaUsage?
 
-    public init(bucket: QuotaBucket) {
+    public init(bucket: QuotaBucket, usageToday: WeeklyQuotaUsage? = nil) {
         self.bucket = bucket
+        self.usageToday = usageToday
     }
 
     public var body: some View {
@@ -379,9 +383,10 @@ public struct QuotaBucketRowView: View {
                         .font(.system(size: 10, weight: .bold, design: .rounded))
                         .foregroundColor(bucket.gaugeColor)
 
-                    Text("(\(Int(bucket.usedPercent.rounded()))% used)")
+                    Text(usedText)
                         .font(.system(size: 9))
                         .foregroundColor(.secondary.opacity(0.8))
+                        .help(usageHelp)
                 }
             }
 
@@ -416,6 +421,18 @@ public struct QuotaBucketRowView: View {
                 }
             }
         }
+    }
+
+    private var usedText: String {
+        let today = usageToday.map { " / \(Int($0.usedPercent.rounded()))% today" } ?? ""
+        return "(\(Int(bucket.usedPercent.rounded()))% used\(today))"
+    }
+
+    private var usageHelp: String {
+        guard let usageToday else { return "Used in the current quota window" }
+        let start = usageToday.startedAt.formatted(date: .omitted, time: .shortened)
+        let note = usageToday.isPartial ? ". Some usage around a reset or adjustment could not be observed." : "."
+        return "Today's weekly consumption tracked since \(start)\(note)"
     }
 
     private static let resetDateFormatter: DateFormatter = {

@@ -87,6 +87,7 @@ public final class TrackerViewModel: ObservableObject {
     @Published public var lastRefreshDate: Date = Date()
     @Published public var pricingSyncDate: Date?
     @Published public var quotaSnapshot: QuotaSnapshot?
+    @Published public private(set) var weeklyUsageToday: [String: WeeklyQuotaUsage] = [:]
     @Published public var isFetchingQuota: Bool = false
     @Published public private(set) var isSyncingPricing: Bool = false
     @Published public var isShowingSettings: Bool = false
@@ -107,6 +108,7 @@ public final class TrackerViewModel: ObservableObject {
     private let pricing: PricingSyncing
     private let watcher = FolderWatcher()
     private let quotaService = QuotaService.shared
+    private let weeklyUsageStore: WeeklyQuotaUsageStore
     private let launchAtLoginManager: LaunchAtLoginManaging
 
     private var cancellables = Set<AnyCancellable>()
@@ -122,10 +124,12 @@ public final class TrackerViewModel: ObservableObject {
     public init(
         startBackgroundServices: Bool = true,
         launchAtLoginManager: LaunchAtLoginManaging = LaunchAtLoginManager.shared,
-        pricing: PricingSyncing = PricingService.shared
+        pricing: PricingSyncing = PricingService.shared,
+        weeklyUsageStore: WeeklyQuotaUsageStore = .shared
     ) {
         self.launchAtLoginManager = launchAtLoginManager
         self.pricing = pricing
+        self.weeklyUsageStore = weeklyUsageStore
         if let savedPeriod = UserDefaults.standard.string(forKey: "agy_selected_period") ?? UserDefaults.standard.string(forKey: "agv_selected_period"),
            let period = TimePeriod(rawValue: savedPeriod) {
             self.selectedPeriod = period
@@ -143,6 +147,7 @@ public final class TrackerViewModel: ObservableObject {
 
         self.pricingSyncDate = pricing.lastSyncDate
         self.quotaSnapshot = quotaService.currentSnapshot
+        updateWeeklyUsage()
         if let latestYear = HistoryStore.shared.availableYears.first {
             self.selectedHistoryYear = latestYear
         }
@@ -308,8 +313,16 @@ public final class TrackerViewModel: ObservableObject {
 
     // MARK: - Fast Precomputed Metrics (Single Pass, Zero Blocking)
 
+    private func updateWeeklyUsage(now: Date = Date(), calendar: Calendar = .current) {
+        weeklyUsageToday = Dictionary((quotaSnapshot?.groups ?? []).compactMap { group in
+            guard let usage = weeklyUsageStore.usage(for: group.id, now: now, calendar: calendar) else { return nil }
+            return (group.id, usage)
+        }, uniquingKeysWith: { first, _ in first })
+    }
+
     public func recomputeMetrics(now: Date = Date(), calendar: Calendar = .current) {
         lastComputedDayStart = calendar.startOfDay(for: now)
+        updateWeeklyUsage(now: now, calendar: calendar)
         let interval = selectedPeriod.dateInterval(now: now, calendar: calendar)
         let surface = selectedSurface
 

@@ -6,6 +6,8 @@ public final class QuotaService: @unchecked Sendable {
 
     private let cacheKey = "agy_cached_quota_json"
     private let cacheDateKey = "agy_cached_quota_timestamp"
+    private let usageStore: WeeklyQuotaUsageStore
+    private let defaults: UserDefaults
 
     private let lock = NSLock()
     private var _currentSnapshot: QuotaSnapshot?
@@ -23,7 +25,9 @@ public final class QuotaService: @unchecked Sendable {
         }
     }
 
-    public init() {
+    public init(usageStore: WeeklyQuotaUsageStore = .shared, defaults: UserDefaults = .standard) {
+        self.usageStore = usageStore
+        self.defaults = defaults
         self._currentSnapshot = loadCachedSnapshot()
     }
 
@@ -96,14 +100,12 @@ public final class QuotaService: @unchecked Sendable {
                     }
 
                     let data = outPipe.fileHandleForReading.readDataToEndOfFile()
-                    guard !data.isEmpty else {
+                    guard process.terminationStatus == 0, !data.isEmpty else {
                         continuation.resume(returning: self.currentSnapshot)
                         return
                     }
 
-                    if let snapshot = try? self.parseQuotaJSON(data: data) {
-                        self.currentSnapshot = snapshot
-                        self.saveCachedSnapshot(data: data)
+                    if let snapshot = try? self.acceptLiveQuota(data: data) {
                         continuation.resume(returning: snapshot)
                     } else {
                         continuation.resume(returning: self.currentSnapshot)
@@ -116,6 +118,22 @@ public final class QuotaService: @unchecked Sendable {
     }
 
     // MARK: - JSON Parsing
+
+    /// The live-success path is deliberately separate from loading or returning the cache.
+    @discardableResult
+    func acceptLiveQuota(data: Data) throws -> QuotaSnapshot {
+        let snapshot = try parseQuotaJSON(data: data)
+        usageStore.record(snapshot)
+        currentSnapshot = snapshot
+        saveCachedSnapshot(data: data, fetchedAt: snapshot.fetchedAt)
+        return snapshot
+    }
+
+    private enum QuotaError: Error {
+        case unsuccessfulResponse
+        case noQuotaData
+        case ambiguousGroups
+    }
 
     private struct RawAgyResponse: Decodable {
         let status: String?
@@ -148,9 +166,12 @@ public final class QuotaService: @unchecked Sendable {
         let reset_time: String?
     }
 
-    public func parseQuotaJSON(data: Data) throws -> QuotaSnapshot {
+    public func parseQuotaJSON(data: Data, fetchedAt: Date = Date()) throws -> QuotaSnapshot {
         let decoder = JSONDecoder()
         let resp = try decoder.decode(RawAgyResponse.self, from: data)
+        if let status = resp.status, status.uppercased() != "SUCCESS" {
+            throw QuotaError.unsuccessfulResponse
+        }
 
         let isoFormatter = ISO8601DateFormatter()
         isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -174,7 +195,8 @@ public final class QuotaService: @unchecked Sendable {
                     for rb in rawBuckets {
                         guard let bId = rb.id, let bWindow = rb.window else { continue }
                         let bName = rb.name ?? bWindow
-                        let fraction = rb.remaining_fraction ?? 1.0
+                        guard let fraction = rb.remaining_fraction,
+                              fraction.isFinite, (0.0...1.0).contains(fraction) else { continue }
                         let resetDate = parseDate(rb.reset_time)
 
                         buckets.append(QuotaBucket(
@@ -189,11 +211,9 @@ public final class QuotaService: @unchecked Sendable {
                     }
                 }
 
-                groups.append(QuotaGroup(
-                    name: gName,
-                    description: rg.description,
-                    buckets: buckets
-                ))
+                if !buckets.isEmpty {
+                    groups.append(QuotaGroup(name: gName, description: rg.description, buckets: buckets))
+                }
             }
         } else if let responseText = resp.response, !responseText.isEmpty {
             // Fallback parsing from response string lines:
@@ -204,10 +224,12 @@ public final class QuotaService: @unchecked Sendable {
                 guard parts.count >= 3 else { continue }
                 let groupName = parts[0].trimmingCharacters(in: .whitespaces)
                 let bucketName = parts[1].trimmingCharacters(in: .whitespaces)
-                let pctStr = parts[2].trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "%", with: "")
+                var pctStr = parts[2].trimmingCharacters(in: .whitespaces)
+                if pctStr.hasSuffix("%") { pctStr.removeLast() }
                 let resetStr = parts.count >= 4 ? parts[3].trimmingCharacters(in: .whitespaces) : nil
 
-                let pct = (Double(pctStr) ?? 100.0) / 100.0
+                guard let percent = Double(pctStr), percent.isFinite, (0.0...100.0).contains(percent) else { continue }
+                let pct = percent / 100.0
                 let isWeekly = bucketName.lowercased().contains("weekly")
                 let window = isWeekly ? "weekly" : "5h"
                 let bucketId = "\(groupName.lowercased().prefix(3))-\(window)"
@@ -232,21 +254,25 @@ public final class QuotaService: @unchecked Sendable {
             }
         }
 
+        guard !groups.isEmpty else { throw QuotaError.noQuotaData }
+        guard Set(groups.map(\.id)).count == groups.count else { throw QuotaError.ambiguousGroups }
         let desc = resp.command?.data?.description
-        return QuotaSnapshot(fetchedAt: Date(), description: desc, groups: groups)
+        return QuotaSnapshot(fetchedAt: fetchedAt, description: desc, groups: groups)
     }
 
     // MARK: - Caching
 
-    private func saveCachedSnapshot(data: Data) {
-        UserDefaults.standard.set(data, forKey: cacheKey)
-        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: cacheDateKey)
+    private func saveCachedSnapshot(data: Data, fetchedAt: Date) {
+        defaults.set(data, forKey: cacheKey)
+        defaults.set(fetchedAt.timeIntervalSince1970, forKey: cacheDateKey)
     }
 
     private func loadCachedSnapshot() -> QuotaSnapshot? {
-        guard let data = UserDefaults.standard.data(forKey: cacheKey) else {
+        guard let data = defaults.data(forKey: cacheKey) else {
             return nil
         }
-        return try? parseQuotaJSON(data: data)
+        let fetchedAt = defaults.object(forKey: cacheDateKey) == nil
+            ? Date.distantPast : Date(timeIntervalSince1970: defaults.double(forKey: cacheDateKey))
+        return try? parseQuotaJSON(data: data, fetchedAt: fetchedAt)
     }
 }
